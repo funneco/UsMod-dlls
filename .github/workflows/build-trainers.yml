@@ -6,19 +6,24 @@ on:
     paths:
       - 'Balatro/**'
       - 'Cyberpunk2077/**'
+      - 'StardewValley/**'
+      - 'include/**'
   workflow_dispatch:
     inputs:
       game:
-        description: 'Game to build (Balatro | Cyberpunk2077 | all)'
+        description: 'Game to build'
         required: true
         default: 'all'
+        type: choice
+        options: [all, Balatro, Cyberpunk2077, StardewValley]
 
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      balatro:    ${{ steps.filter.outputs.balatro }}
-      cyberpunk:  ${{ steps.filter.outputs.cyberpunk }}
+      balatro:   ${{ steps.filter.outputs.balatro }}
+      cyberpunk: ${{ steps.filter.outputs.cyberpunk }}
+      stardew:   ${{ steps.filter.outputs.stardew }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -27,8 +32,13 @@ jobs:
           filters: |
             balatro:
               - 'Balatro/**'
+              - 'include/**'
             cyberpunk:
               - 'Cyberpunk2077/**'
+              - 'include/**'
+            stardew:
+              - 'StardewValley/**'
+              - 'include/**'
 
   build:
     needs: detect-changes
@@ -38,52 +48,83 @@ jobs:
       matrix:
         include:
           - game: Balatro
-            enabled: ${{ needs.detect-changes.outputs.balatro == 'true' || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
+            should_build: ${{ needs.detect-changes.outputs.balatro == 'true' || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
           - game: Cyberpunk2077
-            enabled: ${{ needs.detect-changes.outputs.cyberpunk == 'true' || github.event.inputs.game == 'Cyberpunk2077' || github.event.inputs.game == 'all' }}
+            should_build: ${{ needs.detect-changes.outputs.cyberpunk == 'true' || github.event.inputs.game == 'Cyberpunk2077' || github.event.inputs.game == 'all' }}
+          - game: StardewValley
+            should_build: ${{ needs.detect-changes.outputs.stardew == 'true' || github.event.inputs.game == 'StardewValley' || github.event.inputs.game == 'all' }}
 
     steps:
-      - name: Skip if not changed
-        if: matrix.enabled != 'true'
-        run: exit 0
+      - name: Determine if build needed
+        id: check
+        shell: bash
+        run: |
+          if [ "${{ matrix.should_build }}" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${{ matrix.game }} — no relevant changes."
+          fi
 
       - uses: actions/checkout@v4
+        if: steps.check.outputs.skip != 'true'
 
-      - name: Setup MSVC environment
+      - name: Setup MSVC x64
+        if: steps.check.outputs.skip != 'true'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
       - name: Install Ninja
+        if: steps.check.outputs.skip != 'true'
         run: choco install ninja -y
 
       - name: Configure CMake
+        if: steps.check.outputs.skip != 'true'
         run: cmake -G Ninja -B build -S . -DCMAKE_BUILD_TYPE=Release
         working-directory: ${{ matrix.game }}
 
-      - name: Build
+      - name: Build DLL
+        if: steps.check.outputs.skip != 'true'
         run: cmake --build build --config Release
         working-directory: ${{ matrix.game }}
 
-      - name: Read versions
+      - name: Read versions.json
         id: ver
+        if: steps.check.outputs.skip != 'true'
         shell: pwsh
+        working-directory: ${{ matrix.game }}
         run: |
           $v = Get-Content "versions.json" | ConvertFrom-Json
-          echo "game_id=$($v.game_id)"           >> $env:GITHUB_OUTPUT
-          echo "game_version=$($v.game_version)" >> $env:GITHUB_OUTPUT
-          echo "trainer_version=$($v.trainer_version)" >> $env:GITHUB_OUTPUT
-        working-directory: ${{ matrix.game }}
+          "game_id=$($v.game_id)"               >> $env:GITHUB_OUTPUT
+          "game_version=$($v.game_version)"     >> $env:GITHUB_OUTPUT
+          "trainer_version=$($v.trainer_version)" >> $env:GITHUB_OUTPUT
 
       - name: Compute SHA256
         id: hash
+        if: steps.check.outputs.skip != 'true'
         shell: pwsh
         run: |
-          $dll  = "${{ matrix.game }}/build/trainer.dll"
-          $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLower()
-          echo "sha256=$hash" >> $env:GITHUB_OUTPUT
+          $hash = (Get-FileHash "${{ matrix.game }}/build/trainer.dll" -Algorithm SHA256).Hash.ToLower()
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Host "SHA256: $hash"
+
+      # Save hash to a named file so update-registry can identify which game it belongs to
+      - name: Save SHA256 artifact
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: printf '%s' '${{ steps.hash.outputs.sha256 }}' > '${{ matrix.game }}.sha256'
+
+      - name: Upload SHA256 artifact
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256-${{ matrix.game }}
+          path: ${{ matrix.game }}.sha256
+          retention-days: 1
 
       - name: Generate metadata.json
+        if: steps.check.outputs.skip != 'true'
         shell: pwsh
         run: |
           $meta = [ordered]@{
@@ -99,6 +140,7 @@ jobs:
           $meta | ConvertTo-Json -Depth 2 | Out-File "${{ matrix.game }}/build/metadata.json" -Encoding utf8NoBOM
 
       - name: Create GitHub Release
+        if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ matrix.game }}-${{ steps.ver.outputs.game_version }}-${{ steps.ver.outputs.trainer_version }}"
@@ -109,7 +151,7 @@ jobs:
             **Game version:** ${{ steps.ver.outputs.game_version }}
             **Game ID:** ${{ steps.ver.outputs.game_id }}
             **SHA256:** `${{ steps.hash.outputs.sha256 }}`
-            **Built:** ${{ github.run_id }}
+            **Built:** Run [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           files: |
             ${{ matrix.game }}/build/trainer.dll
             ${{ matrix.game }}/build/metadata.json
@@ -120,63 +162,104 @@ jobs:
   update-registry:
     needs: build
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success'
+    # Run whenever build finishes (even if some matrix jobs were skipped),
+    # but not if the workflow itself was cancelled.
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Rebuild registry.json from all versions.json
+      # Download all sha256-* artifacts into sha256s/ directory.
+      # If no builds ran (all skipped), this produces an empty directory and the
+      # Python script below exits cleanly with nothing to patch.
+      - name: Download SHA256 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sha256-*
+          merge-multiple: true
+          path: sha256s/
+        continue-on-error: true  # no artifacts uploaded if all games were skipped
+
+      - name: Patch registry.json with real SHA256 hashes
         shell: bash
         run: |
-          python3 - <<'EOF'
-          import json, os, glob
+          python3 - <<'PYEOF'
+          import json, os, glob, sys
 
-          trainers = []
-          for vf in sorted(glob.glob("*/versions.json")):
-              game_dir = os.path.dirname(vf)
-              with open(vf) as f:
+          sha_files = glob.glob("sha256s/*.sha256")
+          if not sha_files:
+              print("No SHA256 artifacts found — nothing to patch.")
+              sys.exit(0)
+
+          with open("registry.json") as f:
+              reg = json.load(f)
+
+          patched = []
+          for sha_file in sha_files:
+              game_dir = os.path.basename(sha_file).replace(".sha256", "")
+              versions_file = f"{game_dir}/versions.json"
+              if not os.path.exists(versions_file):
+                  print(f"Warning: {versions_file} not found, skipping {game_dir}")
+                  continue
+
+              with open(versions_file) as f:
                   v = json.load(f)
+              with open(sha_file) as f:
+                  sha256 = f.read().strip()
 
-              # Find all existing releases for this game by scanning existing registry
-              entries = []
-              if os.path.exists("registry.json"):
-                  with open("registry.json") as rf:
-                      reg = json.load(rf)
-                  for t in reg.get("trainers", []):
-                      if t["game_id"] == v["game_id"]:
-                          entries = t["entries"]
+              if not sha256 or len(sha256) != 64:
+                  print(f"Warning: invalid sha256 for {game_dir}: '{sha256}'")
+                  continue
+
+              trainer_version = v["trainer_version"]
+              release_tag     = f"{v['game_name']}-{v['game_version']}-{trainer_version}"
+              repo            = os.environ.get("GITHUB_REPOSITORY", "funneco/UsMod-dlls")
+
+              updated = False
+              for trainer in reg["trainers"]:
+                  if trainer["game_id"] != v["game_id"]:
+                      continue
+                  # Update existing entry for this trainer_version
+                  for entry in trainer["entries"]:
+                      if entry["trainer_version"] == trainer_version:
+                          entry["sha256"] = sha256
+                          updated = True
                           break
+                  # No matching entry yet — prepend a new one
+                  if not updated:
+                      trainer["entries"].insert(0, {
+                          "trainer_version":    trainer_version,
+                          "release_tag":        release_tag,
+                          "repo":               repo,
+                          "dll_filename":       "trainer.dll",
+                          "sha256":             sha256,
+                          "version_constraint": v["version_constraint"],
+                      })
+                      updated = True
+                  break
 
-              # Prepend current build as newest entry
-              new_entry = {
-                  "trainer_version": v["trainer_version"],
-                  "release_tag": f"{v['game_name']}-{v['game_version']}-{v['trainer_version']}",
-                  "repo": "${{ github.repository }}",
-                  "dll_filename": "trainer.dll",
-                  "sha256": "PENDING_HASH",
-                  "version_constraint": v["version_constraint"]
-              }
-              # Avoid duplicate entries for same trainer version
-              entries = [e for e in entries if e["trainer_version"] != v["trainer_version"]]
-              entries.insert(0, new_entry)
+              if updated:
+                  patched.append(game_dir)
+                  print(f"Patched {game_dir}: {sha256[:16]}...")
+              else:
+                  print(f"Warning: no registry entry found for game_id={v['game_id']} ({game_dir})")
 
-              trainers.append({
-                  "game_id": v["game_id"],
-                  "game_name": v["game_name"],
-                  "entries": entries
-              })
-
-          registry = {"version": "1.0", "trainers": trainers}
           with open("registry.json", "w") as f:
-              json.dump(registry, f, indent=2)
-          print("registry.json updated")
-          EOF
+              json.dump(reg, f, indent=2)
+              f.write("\n")
 
-      - name: Commit updated registry
+          print(f"Done. Patched: {patched or 'nothing'}")
+          PYEOF
+
+      - name: Commit updated registry.json
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add registry.json
-          git diff --cached --quiet || git commit -m "ci: update registry.json [skip ci]"
-          git push
+          if git diff --cached --quiet; then
+            echo "registry.json unchanged — nothing to commit."
+          else
+            git commit -m "ci: update registry.json sha256 hashes [skip ci]"
+            git push
+          fi

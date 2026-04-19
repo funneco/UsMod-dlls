@@ -19,6 +19,23 @@
       ]
     },
     {
+      "game_id": "413150",
+      "game_name": "StardewValley",
+      "entries": [
+        {
+          "trainer_version": "1.0.0",
+          "release_tag": "StardewValley-1.6.x-1.0.0",
+          "repo": "funneco/UsMod-dlls",
+          "dll_filename": "trainer.dll",
+          "sha256": "PENDING_HASH",
+          "version_constraint": {
+            "type": "exact",
+            "builds": ["16826371"]
+          }
+        }
+      ]
+    },
+    {
       "game_id": "1091500",
       "game_name": "Cyberpunk2077",
       "entries": [
