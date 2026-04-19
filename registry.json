@@ -10,7 +10,7 @@
           "release_tag": "Balatro-1.0.1f-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "3d80d92d6ad556b193c03977b5848e8ac835a48ddba16ffed4adb9450b21797c",
+          "sha256": "165687341bd80461083194f8d43689bbfdc4a4ca611156232fa7757d5ca54356",
           "version_constraint": {
             "type": "exact",
             "builds": [
@@ -29,7 +29,7 @@
           "release_tag": "StardewValley-1.6.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "463fd637a26cdd6882691ede5aa89bc1f84ecb5a4c6cd9e3a8111f2ca21c0041",
+          "sha256": "61b00bc0c0804b3ff3141567e6b660a04ca0d44931671c578bb5f0a17f43f7e7",
           "version_constraint": {
             "type": "exact",
             "builds": [
@@ -48,7 +48,7 @@
           "release_tag": "Cyberpunk2077-2.12-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "5fab3a26f05c307015872fac68f1fbd9847e43e5711037a997eb130b31d86e3a",
+          "sha256": "04794b6beb1181067fd469bf2b1335d2bdfcbf3a9b4abb4432eb7bd53bf907cd",
           "version_constraint": {
             "type": "range",
             "min_build": "14000000",
