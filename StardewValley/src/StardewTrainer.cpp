@@ -193,7 +193,7 @@ public:
     bool Initialize() {
         DWORD pid = FindPid(L"Stardew Valley.exe");
         if (!pid) {
-            std::cerr << "[StardewTrainer] Process not found\n";
+            OutputDebugStringA("[StardewTrainer] Process not found\n");
             return false;
         }
 
@@ -202,24 +202,25 @@ public:
             PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION,
             FALSE, pid);
         if (!m_hProc) {
-            std::cerr << "[StardewTrainer] OpenProcess failed, error: "
-                      << GetLastError() << "\n";
+            char buf[64];
+            wsprintfA(buf, "[StardewTrainer] OpenProcess failed, error: %lu\n", GetLastError());
+            OutputDebugStringA(buf);
             return false;
         }
 
         uintptr_t base = GetMainModuleBase(m_hProc, L"Stardew Valley.exe");
         if (!base) {
-            std::cerr << "[StardewTrainer] GetMainModuleBase failed\n";
+            OutputDebugStringA("[StardewTrainer] GetMainModuleBase failed\n");
             Cleanup(); return false;
         }
         size_t modSize = GetModuleSize(m_hProc, base);
         if (!modSize) {
-            std::cerr << "[StardewTrainer] GetModuleSize failed\n";
+            OutputDebugStringA("[StardewTrainer] GetModuleSize failed\n");
             Cleanup(); return false;
         }
 
         if (!InstallHooks(base, modSize)) {
-            std::cerr << "[StardewTrainer] InstallHooks failed (AOB mismatch?)\n";
+            OutputDebugStringA("[StardewTrainer] InstallHooks failed (AOB mismatch?)\n");
             Cleanup(); return false;
         }
 
