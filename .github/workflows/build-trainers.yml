@@ -51,11 +51,11 @@ jobs:
       matrix:
         include:
           - game: Balatro
-            should_build: ${{ needs.detect-changes.outputs.balatro == 'true' || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
+            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.balatro == 'true') || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
           - game: Cyberpunk2077
-            should_build: ${{ needs.detect-changes.outputs.cyberpunk == 'true' || github.event.inputs.game == 'Cyberpunk2077' || github.event.inputs.game == 'all' }}
+            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.cyberpunk == 'true') || github.event.inputs.game == 'Cyberpunk2077' || github.event.inputs.game == 'all' }}
           - game: StardewValley
-            should_build: ${{ needs.detect-changes.outputs.stardew == 'true' || github.event.inputs.game == 'StardewValley' || github.event.inputs.game == 'all' }}
+            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.stardew == 'true') || github.event.inputs.game == 'StardewValley' || github.event.inputs.game == 'all' }}
 
     steps:
       - name: Determine if build needed

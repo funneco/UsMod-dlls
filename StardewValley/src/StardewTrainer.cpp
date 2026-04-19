@@ -85,13 +85,13 @@ static uintptr_t AobFirst(HANDLE hProc, uintptr_t base, size_t size,
     return 0;
 }
 
-static uintptr_t AllocNear(HANDLE hProc, uintptr_t near, size_t size) {
+static uintptr_t AllocNear(HANDLE hProc, uintptr_t hint, size_t size) {
     SYSTEM_INFO si; GetSystemInfo(&si);
     const uintptr_t gran = si.dwAllocationGranularity;
-    const uintptr_t lo = (near > 0x7FF00000ULL) ? near - 0x7FF00000ULL : (uintptr_t)si.lpMinimumApplicationAddress;
-    const uintptr_t hi = near + 0x7FF00000ULL;
+    const uintptr_t lo = (hint > 0x7FF00000ULL) ? hint - 0x7FF00000ULL : (uintptr_t)si.lpMinimumApplicationAddress;
+    const uintptr_t hi = hint + 0x7FF00000ULL;
 
-    for (uintptr_t addr = (near & ~(gran - 1)); addr > lo; addr -= gran) {
+    for (uintptr_t addr = (hint & ~(gran - 1)); addr > lo; addr -= gran) {
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) continue;
         if (mbi.State == MEM_FREE) {
@@ -100,7 +100,7 @@ static uintptr_t AllocNear(HANDLE hProc, uintptr_t near, size_t size) {
             if (p) return (uintptr_t)p;
         }
     }
-    for (uintptr_t addr = (near + gran) & ~(gran - 1); addr < hi; addr += gran) {
+    for (uintptr_t addr = (hint + gran) & ~(gran - 1); addr < hi; addr += gran) {
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) continue;
         if (mbi.State == MEM_FREE) {
