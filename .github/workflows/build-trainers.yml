@@ -17,6 +17,9 @@ on:
         type: choice
         options: [all, Balatro, Cyberpunk2077, StardewValley]
 
+permissions:
+  contents: write
+
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
