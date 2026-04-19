@@ -1,0 +1,11 @@
+{
+  "game_id": "1091500",
+  "game_name": "Cyberpunk2077",
+  "game_version": "2.12",
+  "trainer_version": "1.0.0",
+  "version_constraint": {
+    "type": "range",
+    "min_build": "14000000",
+    "max_build": "14199999"
+  }
+}

@@ -1,0 +1,182 @@
+name: Build Trainers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Balatro/**'
+      - 'Cyberpunk2077/**'
+  workflow_dispatch:
+    inputs:
+      game:
+        description: 'Game to build (Balatro | Cyberpunk2077 | all)'
+        required: true
+        default: 'all'
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      balatro:    ${{ steps.filter.outputs.balatro }}
+      cyberpunk:  ${{ steps.filter.outputs.cyberpunk }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            balatro:
+              - 'Balatro/**'
+            cyberpunk:
+              - 'Cyberpunk2077/**'
+
+  build:
+    needs: detect-changes
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - game: Balatro
+            enabled: ${{ needs.detect-changes.outputs.balatro == 'true' || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
+          - game: Cyberpunk2077
+            enabled: ${{ needs.detect-changes.outputs.cyberpunk == 'true' || github.event.inputs.game == 'Cyberpunk2077' || github.event.inputs.game == 'all' }}
+
+    steps:
+      - name: Skip if not changed
+        if: matrix.enabled != 'true'
+        run: exit 0
+
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Configure CMake
+        run: cmake -G Ninja -B build -S . -DCMAKE_BUILD_TYPE=Release
+        working-directory: ${{ matrix.game }}
+
+      - name: Build
+        run: cmake --build build --config Release
+        working-directory: ${{ matrix.game }}
+
+      - name: Read versions
+        id: ver
+        shell: pwsh
+        run: |
+          $v = Get-Content "versions.json" | ConvertFrom-Json
+          echo "game_id=$($v.game_id)"           >> $env:GITHUB_OUTPUT
+          echo "game_version=$($v.game_version)" >> $env:GITHUB_OUTPUT
+          echo "trainer_version=$($v.trainer_version)" >> $env:GITHUB_OUTPUT
+        working-directory: ${{ matrix.game }}
+
+      - name: Compute SHA256
+        id: hash
+        shell: pwsh
+        run: |
+          $dll  = "${{ matrix.game }}/build/trainer.dll"
+          $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLower()
+          echo "sha256=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Generate metadata.json
+        shell: pwsh
+        run: |
+          $meta = [ordered]@{
+            game_id         = "${{ steps.ver.outputs.game_id }}"
+            game_name       = "${{ matrix.game }}"
+            game_version    = "${{ steps.ver.outputs.game_version }}"
+            trainer_version = "${{ steps.ver.outputs.trainer_version }}"
+            dll_filename    = "trainer.dll"
+            sha256          = "${{ steps.hash.outputs.sha256 }}"
+            build_date      = (Get-Date -Format "yyyy-MM-dd")
+            build_run_id    = "${{ github.run_id }}"
+          }
+          $meta | ConvertTo-Json -Depth 2 | Out-File "${{ matrix.game }}/build/metadata.json" -Encoding utf8NoBOM
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ matrix.game }}-${{ steps.ver.outputs.game_version }}-${{ steps.ver.outputs.trainer_version }}"
+          name: "${{ matrix.game }} v${{ steps.ver.outputs.game_version }} (Trainer v${{ steps.ver.outputs.trainer_version }})"
+          body: |
+            ### ${{ matrix.game }} Trainer v${{ steps.ver.outputs.trainer_version }}
+
+            **Game version:** ${{ steps.ver.outputs.game_version }}
+            **Game ID:** ${{ steps.ver.outputs.game_id }}
+            **SHA256:** `${{ steps.hash.outputs.sha256 }}`
+            **Built:** ${{ github.run_id }}
+          files: |
+            ${{ matrix.game }}/build/trainer.dll
+            ${{ matrix.game }}/build/metadata.json
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-registry:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild registry.json from all versions.json
+        shell: bash
+        run: |
+          python3 - <<'EOF'
+          import json, os, glob
+
+          trainers = []
+          for vf in sorted(glob.glob("*/versions.json")):
+              game_dir = os.path.dirname(vf)
+              with open(vf) as f:
+                  v = json.load(f)
+
+              # Find all existing releases for this game by scanning existing registry
+              entries = []
+              if os.path.exists("registry.json"):
+                  with open("registry.json") as rf:
+                      reg = json.load(rf)
+                  for t in reg.get("trainers", []):
+                      if t["game_id"] == v["game_id"]:
+                          entries = t["entries"]
+                          break
+
+              # Prepend current build as newest entry
+              new_entry = {
+                  "trainer_version": v["trainer_version"],
+                  "release_tag": f"{v['game_name']}-{v['game_version']}-{v['trainer_version']}",
+                  "repo": "${{ github.repository }}",
+                  "dll_filename": "trainer.dll",
+                  "sha256": "PENDING_HASH",
+                  "version_constraint": v["version_constraint"]
+              }
+              # Avoid duplicate entries for same trainer version
+              entries = [e for e in entries if e["trainer_version"] != v["trainer_version"]]
+              entries.insert(0, new_entry)
+
+              trainers.append({
+                  "game_id": v["game_id"],
+                  "game_name": v["game_name"],
+                  "entries": entries
+              })
+
+          registry = {"version": "1.0", "trainers": trainers}
+          with open("registry.json", "w") as f:
+              json.dump(registry, f, indent=2)
+          print("registry.json updated")
+          EOF
+
+      - name: Commit updated registry
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add registry.json
+          git diff --cached --quiet || git commit -m "ci: update registry.json [skip ci]"
+          git push
