@@ -313,29 +313,29 @@ private:
     // ── Hook install ──────────────────────────────────────────────────────────
 
     bool InstallHooks(uintptr_t base, size_t modSize) {
-        // ── 1. Game1::Update ─────────────────────────────────────────────────
+        // ── 1. Game1::Update — optional, no-op trampoline reserved for future use ──
         {
             static const uint8_t PAT[] = { 0x57,0x56,0x55,0x53,0x48,0x81,0xEC,0x28,0x01,0x00,0x00 };
             static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1,1,1,1 };
             uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
-            if (!addr) return false;
+            if (addr) {
+                m_hkUpdate.origAddr = addr;
+                m_hkUpdate.origLen  = 11;
+                ReadProcessMemory(m_hProc, (LPCVOID)addr, m_hkUpdate.origBytes, 11, nullptr);
 
-            m_hkUpdate.origAddr = addr;
-            m_hkUpdate.origLen  = 11;
-            ReadProcessMemory(m_hProc, (LPCVOID)addr, m_hkUpdate.origBytes, 11, nullptr);
-
-            uintptr_t cave = AllocNear(m_hProc, addr, 64);
-            if (!cave) return false;
-            m_hkUpdate.caveAddr = cave;
-
-            std::vector<uint8_t> caveBytes(16, 0x90);
-            memcpy(caveBytes.data(), PAT, 11);
-            caveBytes[11] = 0xE9;
-            int32_t rel = (int32_t)((addr + 11) - (cave + 11) - 5);
-            memcpy(&caveBytes[12], &rel, 4);
-            RemoteWrite(m_hProc, cave, caveBytes.data(), 16);
-            WriteRel32Jmp(m_hProc, addr, cave, 11);
-            m_hkUpdate.installed = true;
+                uintptr_t cave = AllocNear(m_hProc, addr, 64);
+                if (cave) {
+                    m_hkUpdate.caveAddr = cave;
+                    std::vector<uint8_t> caveBytes(16, 0x90);
+                    memcpy(caveBytes.data(), PAT, 11);
+                    caveBytes[11] = 0xE9;
+                    int32_t rel = (int32_t)((addr + 11) - (cave + 11) - 5);
+                    memcpy(&caveBytes[12], &rel, 4);
+                    RemoteWrite(m_hProc, cave, caveBytes.data(), 16);
+                    WriteRel32Jmp(m_hProc, addr, cave, 11);
+                    m_hkUpdate.installed = true;
+                }
+            }
         }
 
         // ── 2. Farmer::getMovementSpeed — captures farmer ptr (rcx = this) ───
@@ -343,7 +343,10 @@ private:
             static const uint8_t PAT[] = { 0x56,0x48,0x83,0xEC,0x60,0xC5,0xF8,0x77 };
             static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1 };
             uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
-            if (!addr) return false;
+            if (!addr) {
+                SetLastErr("AOB scan failed — Farmer::getMovementSpeed pattern not found (wrong build?)");
+                return false;
+            }
 
             uintptr_t cave = AllocNear(m_hProc, addr, 128);
             if (!cave) return false;
