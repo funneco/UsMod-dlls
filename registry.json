@@ -8,12 +8,12 @@
         {
           "trainer_version": "1.0.0",
           "release_tag": "Balatro-1.0.1f-1.0.0",
-          "repo": "YOUR_ORG/UsMod-dlls",
+          "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
           "sha256": "a3f2c1d4e5b6a7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2",
           "version_constraint": {
             "type": "exact",
-            "builds": ["13550153"]
+            "builds": ["17459173"]
           }
         }
       ]
@@ -25,7 +25,7 @@
         {
           "trainer_version": "1.0.0",
           "release_tag": "Cyberpunk2077-2.12-1.0.0",
-          "repo": "YOUR_ORG/UsMod-dlls",
+          "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
           "sha256": "b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5",
           "version_constraint": {
