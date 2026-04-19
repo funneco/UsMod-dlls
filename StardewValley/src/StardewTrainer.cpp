@@ -192,17 +192,36 @@ public:
 
     bool Initialize() {
         DWORD pid = FindPid(L"Stardew Valley.exe");
-        if (!pid) return false;
+        if (!pid) {
+            std::cerr << "[StardewTrainer] Process not found\n";
+            return false;
+        }
 
-        m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-        if (!m_hProc) return false;
+        m_hProc = OpenProcess(
+            PROCESS_VM_READ | PROCESS_VM_WRITE |
+            PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION,
+            FALSE, pid);
+        if (!m_hProc) {
+            std::cerr << "[StardewTrainer] OpenProcess failed, error: "
+                      << GetLastError() << "\n";
+            return false;
+        }
 
         uintptr_t base = GetMainModuleBase(m_hProc, L"Stardew Valley.exe");
-        if (!base) { Cleanup(); return false; }
+        if (!base) {
+            std::cerr << "[StardewTrainer] GetMainModuleBase failed\n";
+            Cleanup(); return false;
+        }
         size_t modSize = GetModuleSize(m_hProc, base);
-        if (!modSize) { Cleanup(); return false; }
+        if (!modSize) {
+            std::cerr << "[StardewTrainer] GetModuleSize failed\n";
+            Cleanup(); return false;
+        }
 
-        if (!InstallHooks(base, modSize)) { Cleanup(); return false; }
+        if (!InstallHooks(base, modSize)) {
+            std::cerr << "[StardewTrainer] InstallHooks failed (AOB mismatch?)\n";
+            Cleanup(); return false;
+        }
 
         m_running = true;
         m_thread  = std::thread(&StardewTrainer::Loop, this);
