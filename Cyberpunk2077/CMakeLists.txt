@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(trainer SHARED src/Cyberpunk2077Trainer.cpp)
 
 target_include_directories(trainer PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 
 target_link_libraries(trainer PRIVATE kernel32 user32 psapi)
