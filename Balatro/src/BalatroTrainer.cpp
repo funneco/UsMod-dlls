@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <cstring>
 
-// Balatro (Steam App 1367520) trainer — build 13550153 (v1.0.1f)
+// Balatro (Steam App 2379780) trainer — build 17459173 (v1.0.1f)
 // Scans LOVE2D engine memory for the gold float via AOB pattern.
 
 static const uint8_t GOLD_PATTERN[] = {

@@ -1,10 +1,10 @@
 {
-  "game_id": "1367520",
+  "game_id": "2379780",
   "game_name": "Balatro",
   "game_version": "1.0.1f",
   "trainer_version": "1.0.0",
   "version_constraint": {
     "type": "exact",
-    "builds": ["13550153"]
+    "builds": ["17459173"]
   }
 }
