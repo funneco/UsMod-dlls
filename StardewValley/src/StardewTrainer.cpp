@@ -69,21 +69,43 @@ static size_t GetModuleSize(HANDLE hProc, uintptr_t base) {
     return nt.OptionalHeader.SizeOfImage;
 }
 
-static uintptr_t AobFirst(HANDLE hProc, uintptr_t base, size_t size,
+// Scan all committed executable regions in [rangeStart, rangeEnd).
+// Pass rangeEnd=0 to scan entire process address space.
+static uintptr_t AobFirst(HANDLE hProc,
+                           uintptr_t rangeStart, uintptr_t rangeEnd,
                            const uint8_t* pat, const uint8_t* mask, size_t len) {
     constexpr size_t CHUNK = 0x100000;
     std::vector<uint8_t> buf(CHUNK);
-    for (size_t offset = 0; offset < size; offset += CHUNK) {
-        size_t readSize = (offset + CHUNK > size) ? (size - offset) : CHUNK;
-        SIZE_T r;
-        if (!ReadProcessMemory(hProc, reinterpret_cast<LPCVOID>(base + offset),
-                               buf.data(), readSize, &r)) continue;
-        for (size_t i = 0; i + len <= r; ++i) {
-            bool ok = true;
-            for (size_t j = 0; j < len; ++j)
-                if (mask[j] != 0xCC && buf[i + j] != pat[j]) { ok = false; break; }
-            if (ok) return base + offset + i;
+
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    if (rangeEnd == 0) rangeEnd = (uintptr_t)si.lpMaximumApplicationAddress;
+
+    uintptr_t addr = rangeStart;
+    while (addr < rangeEnd) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) { addr += 0x1000; continue; }
+
+        uintptr_t regionEnd = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        bool exec = (mbi.State  == MEM_COMMIT) &&
+                    (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
+                                    PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+        if (exec) {
+            uintptr_t scanStart = (uintptr_t)mbi.BaseAddress;
+            uintptr_t scanEnd   = std::min(regionEnd, rangeEnd);
+            for (uintptr_t off = scanStart; off < scanEnd; ) {
+                size_t readSize = std::min((size_t)(scanEnd - off), CHUNK);
+                SIZE_T r;
+                if (!ReadProcessMemory(hProc, (LPCVOID)off, buf.data(), readSize, &r)) { off += readSize; continue; }
+                for (size_t i = 0; i + len <= r; ++i) {
+                    bool ok = true;
+                    for (size_t j = 0; j < len; ++j)
+                        if (mask[j] != 0xCC && buf[i + j] != pat[j]) { ok = false; break; }
+                    if (ok) return off + i;
+                }
+                off += r;
+            }
         }
+        addr = regionEnd;
     }
     return 0;
 }
@@ -211,19 +233,7 @@ public:
             return false;
         }
 
-        uintptr_t base = GetMainModuleBase(m_hProc, L"Stardew Valley.exe");
-        if (!base) {
-            SetLastErr("GetMainModuleBase failed — could not find game module");
-            Cleanup(); return false;
-        }
-        size_t modSize = GetModuleSize(m_hProc, base);
-        if (!modSize) {
-            SetLastErr("GetModuleSize failed");
-            Cleanup(); return false;
-        }
-
-        if (!InstallHooks(base, modSize)) {
-            SetLastErr("AOB scan failed — game build may not match trainer (check build ID)");
+        if (!InstallHooks()) {
             Cleanup(); return false;
         }
 
@@ -312,12 +322,12 @@ private:
 
     // ── Hook install ──────────────────────────────────────────────────────────
 
-    bool InstallHooks(uintptr_t base, size_t modSize) {
+    bool InstallHooks() {
         // ── 1. Game1::Update — optional, no-op trampoline reserved for future use ──
         {
             static const uint8_t PAT[] = { 0x57,0x56,0x55,0x53,0x48,0x81,0xEC,0x28,0x01,0x00,0x00 };
             static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
+            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
             if (addr) {
                 m_hkUpdate.origAddr = addr;
                 m_hkUpdate.origLen  = 11;
@@ -342,7 +352,7 @@ private:
         {
             static const uint8_t PAT[] = { 0x56,0x48,0x83,0xEC,0x60,0xC5,0xF8,0x77 };
             static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
+            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
             if (!addr) {
                 SetLastErr("AOB scan failed — Farmer::getMovementSpeed pattern not found (wrong build?)");
                 return false;
@@ -375,7 +385,7 @@ private:
         {
             static const uint8_t PAT[] = { 0x41,0x57,0x41,0x56,0x57,0x56,0x55,0x53,0x48,0x83,0xEC,0x38,0xC5,0xF8,0x77 };
             static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
+            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
             if (addr) {
                 m_hkBite.origAddr = addr;
                 m_hkBite.origLen  = 5;
@@ -401,7 +411,7 @@ private:
         {
             static const uint8_t PAT[] = { 0xC5,0xFA,0x10,0x86,0xC8,0x00,0x00,0x00 };
             static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
+            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
             if (addr) {
                 m_hkCatch.origAddr = addr;
                 m_hkCatch.origLen  = 8;
@@ -428,7 +438,7 @@ private:
         {
             static const uint8_t PAT[] = { 0x44,0x88,0xAE,0xCC,0xCC,0xCC,0xCC,0x44,0x89,0xB6 };
             static const uint8_t MSK[] = { 1,1,1,0,0,0,0,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, base, modSize, PAT, MSK, sizeof(PAT));
+            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
             if (addr) {
                 m_hkQuality.origAddr = addr;
                 m_hkQuality.origLen  = 7;
