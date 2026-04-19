@@ -22,13 +22,14 @@ typedef struct {
     int         default_vk;  // default Windows VK code (0 = no default)
 } TrainerFeatureInfo;
 
-// ── Core lifecycle — every trainer must export these six ────────────────────
+// ── Core lifecycle ──────────────────────────────────────────────────────────
 TRAINER_EXPORT void*       trainer_create    ();
 TRAINER_EXPORT void        trainer_destroy   (void* handle);
 TRAINER_EXPORT int         trainer_initialize(void* handle);       // 1 = ok, 0 = fail
 TRAINER_EXPORT void        trainer_shutdown  (void* handle);
 TRAINER_EXPORT const char* trainer_get_name  (void* handle);       // static string, no alloc
 TRAINER_EXPORT const char* trainer_get_version(void* handle);      // static string, no alloc
+TRAINER_EXPORT const char* trainer_get_last_error();               // static string, set on failure
 
 // ── Feature API — every trainer must export these seven ─────────────────────
 TRAINER_EXPORT int                       trainer_get_feature_count  (void* handle);

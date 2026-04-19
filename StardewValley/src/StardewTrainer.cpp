@@ -21,6 +21,9 @@
 #include <cstdint>
 #include <cstring>
 
+static char g_lastError[256] = "";
+static void SetLastErr(const char* msg) { strncpy(g_lastError, msg, sizeof(g_lastError) - 1); }
+
 // ── .NET Farmer field offsets ─────────────────────────────────────────────────
 static constexpr ptrdiff_t OFF_HEALTH           = 0x178;
 static constexpr ptrdiff_t OFF_MAX_HEALTH       = 0x17C;
@@ -193,7 +196,7 @@ public:
     bool Initialize() {
         DWORD pid = FindPid(L"Stardew Valley.exe");
         if (!pid) {
-            OutputDebugStringA("[StardewTrainer] Process not found\n");
+            SetLastErr("process not found — is Stardew Valley running?");
             return false;
         }
 
@@ -202,25 +205,25 @@ public:
             PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION,
             FALSE, pid);
         if (!m_hProc) {
-            char buf[64];
-            wsprintfA(buf, "[StardewTrainer] OpenProcess failed, error: %lu\n", GetLastError());
-            OutputDebugStringA(buf);
+            char buf[128];
+            wsprintfA(buf, "OpenProcess failed (error %lu) — try running as administrator", GetLastError());
+            SetLastErr(buf);
             return false;
         }
 
         uintptr_t base = GetMainModuleBase(m_hProc, L"Stardew Valley.exe");
         if (!base) {
-            OutputDebugStringA("[StardewTrainer] GetMainModuleBase failed\n");
+            SetLastErr("GetMainModuleBase failed — could not find game module");
             Cleanup(); return false;
         }
         size_t modSize = GetModuleSize(m_hProc, base);
         if (!modSize) {
-            OutputDebugStringA("[StardewTrainer] GetModuleSize failed\n");
+            SetLastErr("GetModuleSize failed");
             Cleanup(); return false;
         }
 
         if (!InstallHooks(base, modSize)) {
-            OutputDebugStringA("[StardewTrainer] InstallHooks failed (AOB mismatch?)\n");
+            SetLastErr("AOB scan failed — game build may not match trainer (check build ID)");
             Cleanup(); return false;
         }
 
@@ -618,5 +621,7 @@ void trainer_set_keybind(void* h, const char* id, int vk)
     { static_cast<StardewTrainer*>(h)->SetKeybind(id, vk); }
 int trainer_get_keybind(void* h, const char* id)
     { return static_cast<StardewTrainer*>(h)->GetKeybind(id); }
+
+const char* trainer_get_last_error() { return g_lastError; }
 
 } // extern "C"
