@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'Balatro/**'
-      - 'Cyberpunk2077/**'
+      - 'PowerwashSimulator/**'
       - 'GoatSimulator/**'
       - 'StardewValley/**'
       - 'WeLoveKatamariREROLL/**'
@@ -17,7 +17,7 @@ on:
         required: true
         default: 'all'
         type: choice
-        options: [all, Balatro, Cyberpunk2077, GoatSimulator, StardewValley, WeLoveKatamariREROLL]
+        options: [all, Balatro, PowerwashSimulator, GoatSimulator, StardewValley, WeLoveKatamariREROLL]
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       balatro:       ${{ steps.filter.outputs.balatro }}
-      cyberpunk:     ${{ steps.filter.outputs.cyberpunk }}
+      powerwashsimulator:     ${{ steps.filter.outputs.powerwashsimulator }}
       goatsimulator: ${{ steps.filter.outputs.goatsimulator }}
       stardew:       ${{ steps.filter.outputs.stardew }}
       wlkrr:         ${{ steps.filter.outputs.wlkrr }}
@@ -40,8 +40,8 @@ jobs:
             balatro:
               - 'Balatro/**'
               - 'include/**'
-            cyberpunk:
-              - 'Cyberpunk2077/**'
+            powerwashsimulator:
+              - 'PowerwashSimulator/**'
               - 'include/**'
             goatsimulator:
               - 'GoatSimulator/**'
@@ -62,8 +62,8 @@ jobs:
         include:
           - game: Balatro
             should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.balatro == 'true') || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
-          - game: Cyberpunk2077
-            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.cyberpunk == 'true') || github.event.inputs.game == 'Cyberpunk2077' || github.event.inputs.game == 'all' }}
+          - game: PowerwashSimulator
+            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.powerwashsimulator == 'true') || github.event.inputs.game == 'PowerwashSimulator' || github.event.inputs.game == 'all' }}
           - game: GoatSimulator
             should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.goatsimulator == 'true') || github.event.inputs.game == 'GoatSimulator' || github.event.inputs.game == 'all' }}
           - game: StardewValley
