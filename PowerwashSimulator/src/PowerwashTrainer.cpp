@@ -61,8 +61,7 @@ static uintptr_t AobScan(HANDLE hProc, uintptr_t base, size_t sz, const uint8_t*
 
 struct PatchSite {
     uintptr_t addr = 0;
-    uint8_t orig[15] = { 0 };
-    size_t len = 0;
+    uint8_t orig[5] = { 0 }; // We only need 5 bytes for this specific jump
     uintptr_t cave = 0;
 };
 
@@ -105,20 +104,43 @@ public:
         ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 10, nullptr);
 
         // Patch 2: Show Dirt (AOB Scan)
-        uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10 };
-        m_siteDirt.addr = AobScan(m_hProc, gaBase, 0x2000000, pat, 8);
-        if (m_siteDirt.addr) {
-            m_siteDirt.len = 5;
-            ReadProcessMemory(m_hProc, (LPCVOID)m_siteDirt.addr, m_siteDirt.orig, 5, nullptr);
-            m_siteDirt.cave = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-            
-            float val = 1.0f;
-            uint8_t code[] = { 0xF3, 0x0F, 0x10, 0x05, 0x0A, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xE9, 0,0,0,0 };
-            int32_t rel = (int32_t)(m_siteDirt.addr + 5 - (m_siteDirt.cave + 18));
-            memcpy(&code[14], &rel, 4);
-            WriteProcessMemory(m_hProc, (LPVOID)m_siteDirt.cave, code, 18, nullptr);
-            WriteProcessMemory(m_hProc, (LPVOID)(m_siteDirt.cave + 18), &val, 4, nullptr);
-        }
+        uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x00, 0x28 }; // ?? becomes 0x00 for the scan mask
+m_siteDirt.addr = AobScan(m_hProc, gaBase, 0x3000000, pat, 10); 
+
+if (m_siteDirt.addr) {
+    // READ ONLY 5 BYTES - This matches the 'db F3 0F 11 43 38' in your [DISABLE]
+    ReadProcessMemory(m_hProc, (LPCVOID)m_siteDirt.addr, m_siteDirt.orig, 5, nullptr);
+
+    m_siteDirt.cave = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    
+    float glow_val = 1.0f;
+    uintptr_t glow_val_addr = m_siteDirt.cave + 0x100; // Put the float offset away from code
+
+    /* THE NEWMEM BLOCK
+       Matches your script logic:
+       movss xmm0, [glow_val]
+       movss [rbx+38], xmm0
+       jmp return
+    */
+    uint8_t code[] = { 
+        0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0, [rip+offset] (8 bytes)
+        0xF3, 0x0F, 0x11, 0x43, 0x38,                   // movss [rbx+38], xmm0 (5 bytes)
+        0xE9, 0x00, 0x00, 0x00, 0x00                    // jmp return (5 bytes)
+    };
+
+    // Calculate offset for movss xmm0, [glow_val]
+    // In x64, rip-relative addressing is: target - (current_instruction_addr + instruction_size)
+    int32_t glow_off = (int32_t)(glow_val_addr - (m_siteDirt.cave + 8));
+    memcpy(&code[4], &glow_off, 4);
+
+    // Calculate offset for jmp return
+    // return is m_siteDirt.addr + 5
+    int32_t ret_off = (int32_t)((m_siteDirt.addr + 5) - (m_siteDirt.cave + 18));
+    memcpy(&code[14], &ret_off, 4);
+
+    WriteProcessMemory(m_hProc, (LPVOID)m_siteDirt.cave, code, sizeof(code), nullptr);
+    WriteProcessMemory(m_hProc, (LPVOID)glow_val_addr, &glow_val, 4, nullptr);
+}
 
         m_running = true;
         m_thread = std::thread(&PowerWashTrainer::Loop, this);
@@ -149,22 +171,16 @@ public:
             it++;
             if (it->enabled != p2 && m_siteDirt.addr) {
     if (it->enabled) {
-        // We need to overwrite 10 bytes to be safe (the length of the instructions in the AOB)
-        // 1. The Jump (5 bytes)
-        // 2. NOPs (5 bytes) to clean up the rest of the original instructions
-        uint8_t patch[10] = { 0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90 };
+        // OVERWRITE EXACTLY 5 BYTES
+        // This replaces 'movss [rbx+38], xmm0' with a JMP
+        uint8_t jmp_patch[5] = { 0xE9, 0, 0, 0, 0 };
+        int32_t jmp_off = (int32_t)(m_siteDirt.cave - (m_siteDirt.addr + 5));
+        memcpy(&jmp_patch[1], &jmp_off, 4);
         
-        // Calculate relative offset for the jump to your codecave
-        int32_t relativeAddr = (int32_t)(m_siteDirt.cave - m_siteDirt.addr - 5);
-        memcpy(&patch[1], &relativeAddr, 4);
-
-        // Write all 10 bytes at once
-        MemWrite(m_hProc, m_siteDirt.addr, patch, 10);
+        MemWrite(m_hProc, m_siteDirt.addr, jmp_patch, 5);
     } else {
-        // Restore all 10 bytes from the original scan
-        // This MUST match the original bytes: F3 0F 11 43 38 F3 0F 10 43 28
-        uint8_t original[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x43, 0x28 };
-        MemWrite(m_hProc, m_siteDirt.addr, original, 10);
+        // RESTORE EXACTLY 5 BYTES
+        MemWrite(m_hProc, m_siteDirt.addr, m_siteDirt.orig, 5);
     }
     p2 = it->enabled;
 }
