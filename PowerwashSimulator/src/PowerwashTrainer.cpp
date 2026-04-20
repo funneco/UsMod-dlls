@@ -97,39 +97,50 @@ public:
     ~PWSTrainer() { Shutdown(); }
 
     bool Initialize() {
-        DWORD pid = FindPid(L"PowerWashSimulator.exe");
-        if (!pid) {
-            SetLastErr("Process not found - Start PowerWash Simulator first.");
-            return false;
-        }
-
-        m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-        if (!m_hProc) {
-            SetLastErr("Failed to open process - Run as Administrator.");
-            return false;
-        }
-
-        uintptr_t base = 0; size_t sz = 0;
-        if (!GetModuleInfo(pid, L"GameAssembly.dll", base, sz)) {
-            SetLastErr("GameAssembly.dll not found.");
-            return false;
-        }
-
-        // Pattern for PWS.WasherClassNozzleSettings:GetEffectivenessAgainst
-        static const uint8_t PAT_CLEAN[] = { 0x48, 0x83, 0xEC, 0x28, 0x81, 0xFA, 0x00, 0x01, 0x00, 0x00 };
-        m_siteClean.addr = AobFirst(m_hProc, base, sz, PAT_CLEAN, sizeof(PAT_CLEAN));
-
-        if (!m_siteClean.addr) {
-            SetLastErr("Could not find cleaning function - Game update?");
-            return false;
-        }
-
-        ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 10, nullptr);
-
-        m_running = true;
-        m_thread = std::thread(&PWSTrainer::Loop, this);
-        return true;
+    DWORD pid = FindPid(L"PowerWashSimulator.exe");
+    if (!pid) {
+        SetLastErr("Process not found - Start the game first.");
+        return false;
     }
+
+    m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (!m_hProc) {
+        SetLastErr("OpenProcess failed - Run as Admin.");
+        return false;
+    }
+
+    uintptr_t base = 0; size_t sz = 0;
+    if (!GetModuleInfo(pid, L"GameAssembly.dll", base, sz)) {
+        SetLastErr("GameAssembly.dll not found. Wait for the level to load.");
+        return false;
+    }
+
+    // New, more resilient pattern
+    static const uint8_t PAT_CLEAN[] = { 0x48, 0x83, 0xEC, 0x28, 0x81, 0xFA };
+    m_siteClean.addr = AobFirst(m_hProc, base, sz, PAT_CLEAN, sizeof(PAT_CLEAN));
+
+    if (!m_siteClean.addr) {
+        // Fallback: search for the second half of the nozzle logic if start is obscured
+        static const uint8_t FALLBACK_PAT[] = { 0x81, 0xFA, 0x00, 0x01, 0x00, 0x00 };
+        m_siteClean.addr = AobFirst(m_hProc, base, sz, FALLBACK_PAT, sizeof(FALLBACK_PAT));
+        
+        if (m_siteClean.addr) {
+            m_siteClean.addr -= 4; // Move back to the start of the function (sub rsp, 28)
+        }
+    }
+
+    if (!m_siteClean.addr) {
+        SetLastErr("AOB Scan failed. Game version may be incompatible.");
+        return false;
+    }
+
+    // Capture what was there to avoid crashing on toggle-off
+    ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 10, nullptr);
+
+    m_running = true;
+    m_thread = std::thread(&PWSTrainer::Loop, this);
+    return true;
+}
 
     void Shutdown() {
         m_running = false;
