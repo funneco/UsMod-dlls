@@ -10,7 +10,7 @@ target_include_directories(trainer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 
-target_link_libraries(trainer PRIVATE kernel32 user32 psapi)
+target_link_libraries(trainer PRIVATE kernel32 user32)
 
 if(MSVC)
     target_compile_options(trainer PRIVATE /W4 /WX-)

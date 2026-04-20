@@ -8,6 +8,7 @@ on:
       - 'Cyberpunk2077/**'
       - 'GoatSimulator/**'
       - 'StardewValley/**'
+      - 'WeLoveKatamariREROLL/**'
       - 'include/**'
   workflow_dispatch:
     inputs:
@@ -16,7 +17,7 @@ on:
         required: true
         default: 'all'
         type: choice
-        options: [all, Balatro, Cyberpunk2077, GoatSimulator, StardewValley]
+        options: [all, Balatro, Cyberpunk2077, GoatSimulator, StardewValley, WeLoveKatamariREROLL]
 
 permissions:
   contents: write
@@ -29,6 +30,7 @@ jobs:
       cyberpunk:     ${{ steps.filter.outputs.cyberpunk }}
       goatsimulator: ${{ steps.filter.outputs.goatsimulator }}
       stardew:       ${{ steps.filter.outputs.stardew }}
+      wlkrr:         ${{ steps.filter.outputs.wlkrr }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -47,6 +49,9 @@ jobs:
             stardew:
               - 'StardewValley/**'
               - 'include/**'
+            wlkrr:
+              - 'WeLoveKatamariREROLL/**'
+              - 'include/**'
 
   build:
     needs: detect-changes
@@ -63,6 +68,8 @@ jobs:
             should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.goatsimulator == 'true') || github.event.inputs.game == 'GoatSimulator' || github.event.inputs.game == 'all' }}
           - game: StardewValley
             should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.stardew == 'true') || github.event.inputs.game == 'StardewValley' || github.event.inputs.game == 'all' }}
+          - game: WeLoveKatamariREROLL
+            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.wlkrr == 'true') || github.event.inputs.game == 'WeLoveKatamariREROLL' || github.event.inputs.game == 'all' }}
 
     steps:
       - name: Determine if build needed

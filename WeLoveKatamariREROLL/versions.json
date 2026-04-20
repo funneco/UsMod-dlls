@@ -1,0 +1,10 @@
+{
+  "game_id": "1730700",
+  "game_name": "WeLoveKatamariREROLL",
+  "game_version": "1.0.x",
+  "trainer_version": "1.0.0",
+  "version_constraint": {
+    "type": "exact",
+    "builds": ["20552039"]
+  }
+}

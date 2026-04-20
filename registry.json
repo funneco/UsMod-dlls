@@ -59,6 +59,25 @@
       ]
     },
     {
+      "game_id": "1730700",
+      "game_name": "WeLoveKatamariREROLL",
+      "entries": [
+        {
+          "trainer_version": "1.0.0",
+          "release_tag": "WeLoveKatamariREROLL-1.0.x-1.0.0",
+          "repo": "funneco/UsMod-dlls",
+          "dll_filename": "trainer.dll",
+          "sha256": "",
+          "version_constraint": {
+            "type": "exact",
+            "builds": [
+              "20552039"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "game_id": "1091500",
       "game_name": "Cyberpunk2077",
       "entries": [
