@@ -252,7 +252,8 @@ private:
 
     // ── Countdown pattern (>=2 required) ─────────────────────────────────────
     static const uint8_t PAT_CD[] = {
-        0x89,0x4A,0x3C, 0x48,0x83,0xC4,0x28, 0xC3, 0xE8
+    0x89, 0x4A, 0x3C,
+    0x48, 0x83, 0xC4, 0x28
     };
     bool readOk = false;
 auto cdHits = AobAll(m_hProc, gaBase, gaSize,
