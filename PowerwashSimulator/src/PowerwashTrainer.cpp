@@ -55,15 +55,15 @@ static uintptr_t AobScan(HANDLE hProc, uintptr_t base, size_t sz, const uint8_t*
     std::vector<uint8_t> buf(sz);
     SIZE_T r = 0;
     if (!ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r)) return 0;
-    for (size_t i = 0; i + len <= r; ++i) if (memcmp(buf.data() + i, pat, len) == 0) return base + i;
+    for (size_t i = 0; i + len <= r; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < len; j++) {
+            if (pat[j] != 0x00 && buf[i + j] != pat[j]) { match = false; break; }
+        }
+        if (match) return base + i;
+    }
     return 0;
 }
-
-struct PatchSite {
-    uintptr_t addr = 0;
-    uint8_t orig[5] = { 0 }; // Matches the 5 bytes your script restores
-    uintptr_t cave = 0;
-};
 
 struct Feature {
     TrainerFeatureInfo info;
@@ -73,73 +73,63 @@ struct Feature {
         : info{ i,n,d,tog,vk }, vk_code(vk) {}
 };
 
-// --- Main Trainer Class ---
 class PowerWashTrainer {
 public:
     HANDLE m_hProc = nullptr;
     std::atomic<bool> m_running{ false };
     std::thread m_thread;
     std::list<Feature> m_features;
-    PatchSite m_siteClean, m_siteDirt;
+
+    // Separate storage for each patch to avoid buffer overflows or truncation
+    uintptr_t addrClean = 0;
+    uint8_t origClean[10] = { 0 };
+
+    uintptr_t addrDirt = 0;
+    uint8_t origDirt[5] = { 0 };
+    uintptr_t caveDirt = 0;
 
     PowerWashTrainer() {
-        m_features.emplace_back("instant_clean", "Instant Clean", "10k Power Effectiveness", 1, VK_F1);
+        m_features.emplace_back("instant_clean", "Instant Clean", "10k Power", 1, VK_F1);
         m_features.emplace_back("show_dirt", "Show Dirt", "Permanent Highlight", 1, VK_F3);
     }
 
-    const char* GetName() { return "PowerWash Simulator Trainer"; }
-    const char* GetVersion() { return "1.8.0"; }
-
     bool Initialize() {
         DWORD pid = FindPid(L"PowerWashSimulator.exe");
-        if (!pid) { SetLastErr("Process not found"); return false; }
-        
+        if (!pid) return false;
         m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         uintptr_t gaBase = GetModuleBase(pid, L"GameAssembly.dll");
-        if (!gaBase) { SetLastErr("GameAssembly.dll not found"); return false; }
+        if (!gaBase) return false;
 
-        // Patch 1: Instant Clean (Static Offset)
-        m_siteClean.addr = gaBase + 0xDF4790;
-        ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 5, nullptr);
+        // --- Instant Clean Setup ---
+        addrClean = gaBase + 0xDF4790;
+        ReadProcessMemory(m_hProc, (LPCVOID)addrClean, origClean, 10, nullptr);
 
-        // Patch 2: Show Dirt (AOB Scan)
+        // --- Show Dirt Setup (Matching your working CE script) ---
         uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x00, 0x28 };
-        m_siteDirt.addr = AobScan(m_hProc, gaBase, 0x3000000, pat, 10);
+        addrDirt = AobScan(m_hProc, gaBase, 0x3000000, pat, 10);
 
-if (m_siteDirt.addr) {
-    // READ ONLY 5 BYTES - This matches the 'db F3 0F 11 43 38' in your [DISABLE]
-    ReadProcessMemory(m_hProc, (LPCVOID)m_siteDirt.addr, m_siteDirt.orig, 5, nullptr);
+        if (addrDirt) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrDirt, origDirt, 5, nullptr);
+            caveDirt = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            float glow_val = 1.0f;
+            uintptr_t glow_addr = caveDirt + 0x100;
 
-    m_siteDirt.cave = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    
-    float glow_val = 1.0f;
-    uintptr_t glow_val_addr = m_siteDirt.cave + 0x100; // Put the float offset away from code
+            uint8_t code[] = { 
+                0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0, [glow]
+                0xF3, 0x0F, 0x11, 0x43, 0x38,                   // movss [rbx+38], xmm0
+                0xE9, 0x00, 0x00, 0x00, 0x00                    // jmp back
+            };
 
-    /* THE NEWMEM BLOCK
-       Matches your script logic:
-       movss xmm0, [glow_val]
-       movss [rbx+38], xmm0
-       jmp return
-    */
-    uint8_t code[] = { 
-        0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0, [rip+offset] (8 bytes)
-        0xF3, 0x0F, 0x11, 0x43, 0x38,                   // movss [rbx+38], xmm0 (5 bytes)
-        0xE9, 0x00, 0x00, 0x00, 0x00                    // jmp return (5 bytes)
-    };
+            int32_t glow_off = (int32_t)(glow_addr - (caveDirt + 8));
+            memcpy(&code[4], &glow_off, 4);
 
-    // Calculate offset for movss xmm0, [glow_val]
-    // In x64, rip-relative addressing is: target - (current_instruction_addr + instruction_size)
-    int32_t glow_off = (int32_t)(glow_val_addr - (m_siteDirt.cave + 8));
-    memcpy(&code[4], &glow_off, 4);
+            int32_t ret_off = (int32_t)((addrDirt + 5) - (caveDirt + 18));
+            memcpy(&code[14], &ret_off, 4);
 
-    // Calculate offset for jmp return
-    // return is m_siteDirt.addr + 5
-    int32_t ret_off = (int32_t)((m_siteDirt.addr + 5) - (m_siteDirt.cave + 18));
-    memcpy(&code[14], &ret_off, 4);
-
-    WriteProcessMemory(m_hProc, (LPVOID)m_siteDirt.cave, code, sizeof(code), nullptr);
-    WriteProcessMemory(m_hProc, (LPVOID)glow_val_addr, &glow_val, 4, nullptr);
-}
+            WriteProcessMemory(m_hProc, (LPVOID)caveDirt, code, sizeof(code), nullptr);
+            WriteProcessMemory(m_hProc, (LPVOID)glow_addr, &glow_val, 4, nullptr);
+        }
 
         m_running = true;
         m_thread = std::thread(&PowerWashTrainer::Loop, this);
@@ -155,34 +145,30 @@ if (m_siteDirt.addr) {
             }
 
             auto it = m_features.begin();
-            // Logic for Instant Clean
+            // Instant Clean Patch (10 Bytes)
             if (it->enabled != p1) {
                 if (it->enabled) {
-                    uint8_t p[] = { 0xB8,0x10,0x27,0x00,0x00,0xF3,0x0F,0x2A,0xC0,0xC3 }; 
-                    MemWrite(m_hProc, m_siteClean.addr, p, 10);
+                    uint8_t p[10] = { 0xB8,0x10,0x27,0x00,0x00,0xF3,0x0F,0x2A,0xC0,0xC3 }; 
+                    MemWrite(m_hProc, addrClean, p, 10);
                 } else {
-                    MemWrite(m_hProc, m_siteClean.addr, m_siteClean.orig, 10);
+                    MemWrite(m_hProc, addrClean, origClean, 10);
                 }
                 p1 = it->enabled;
             }
 
-            // Logic for Show Dirt
             it++;
-            if (it->enabled != p2 && m_siteDirt.addr) {
-    if (it->enabled) {
-        // OVERWRITE EXACTLY 5 BYTES
-        // This replaces 'movss [rbx+38], xmm0' with a JMP
-        uint8_t jmp_patch[5] = { 0xE9, 0, 0, 0, 0 };
-        int32_t jmp_off = (int32_t)(m_siteDirt.cave - (m_siteDirt.addr + 5));
-        memcpy(&jmp_patch[1], &jmp_off, 4);
-        
-        MemWrite(m_hProc, m_siteDirt.addr, jmp_patch, 5);
-    } else {
-        // RESTORE EXACTLY 5 BYTES
-        MemWrite(m_hProc, m_siteDirt.addr, m_siteDirt.orig, 5);
-    }
-    p2 = it->enabled;
-}
+            // Show Dirt Patch (5 Bytes)
+            if (it->enabled != p2 && addrDirt) {
+                if (it->enabled) {
+                    uint8_t jmp[5] = { 0xE9, 0, 0, 0, 0 };
+                    int32_t off = (int32_t)(caveDirt - (addrDirt + 5));
+                    memcpy(&jmp[1], &off, 4);
+                    MemWrite(m_hProc, addrDirt, jmp, 5);
+                } else {
+                    MemWrite(m_hProc, addrDirt, origDirt, 5);
+                }
+                p2 = it->enabled;
+            }
             Sleep(10);
         }
     }
@@ -195,39 +181,23 @@ if (m_siteDirt.addr) {
     void ActivateFeature(const char* id) {}
     void SetKeybind(const char* id, int vk) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.vk_code = vk; }
     int GetKeybind(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.vk_code.load(); return 0; }
+    const char* GetName() { return "PowerWash Simulator Trainer"; }
+    const char* GetVersion() { return "1.8.0"; }
 };
 
-// --- C ABI exports (Exactly like your example) ---
 extern "C" {
-
     __declspec(dllexport) void* trainer_create() { return new PowerWashTrainer(); }
     __declspec(dllexport) void  trainer_destroy(void* h) { delete static_cast<PowerWashTrainer*>(h); }
     __declspec(dllexport) int   trainer_initialize(void* h) { return static_cast<PowerWashTrainer*>(h)->Initialize() ? 1 : 0; }
     __declspec(dllexport) void  trainer_shutdown(void* h) { static_cast<PowerWashTrainer*>(h)->Shutdown(); }
-
     __declspec(dllexport) const char* trainer_get_name(void* h) { return static_cast<PowerWashTrainer*>(h)->GetName(); }
     __declspec(dllexport) const char* trainer_get_version(void* h) { return static_cast<PowerWashTrainer*>(h)->GetVersion(); }
-
-    __declspec(dllexport) int trainer_get_feature_count(void* h)
-    { return static_cast<PowerWashTrainer*>(h)->GetFeatureCount(); }
-    
-    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx)
-    { return static_cast<PowerWashTrainer*>(h)->GetFeatureInfo(idx); }
-    
-    __declspec(dllexport) int trainer_get_feature_enabled(void* h, const char* id)
-    { return static_cast<PowerWashTrainer*>(h)->GetFeatureEnabled(id); }
-    
-    __declspec(dllexport) void trainer_set_feature_enabled(void* h, const char* id, int en)
-    { static_cast<PowerWashTrainer*>(h)->SetFeatureEnabled(id, en); }
-    
-    __declspec(dllexport) void trainer_activate_feature(void* h, const char* id)
-    { static_cast<PowerWashTrainer*>(h)->ActivateFeature(id); }
-    
-    __declspec(dllexport) void trainer_set_keybind(void* h, const char* id, int vk)
-    { static_cast<PowerWashTrainer*>(h)->SetKeybind(id, vk); }
-    
-    __declspec(dllexport) int trainer_get_keybind(void* h, const char* id)
-    { return static_cast<PowerWashTrainer*>(h)->GetKeybind(id); }
-
+    __declspec(dllexport) int trainer_get_feature_count(void* h) { return static_cast<PowerWashTrainer*>(h)->GetFeatureCount(); }
+    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx) { return static_cast<PowerWashTrainer*>(h)->GetFeatureInfo(idx); }
+    __declspec(dllexport) int trainer_get_feature_enabled(void* h, const char* id) { return static_cast<PowerWashTrainer*>(h)->GetFeatureEnabled(id); }
+    __declspec(dllexport) void trainer_set_feature_enabled(void* h, const char* id, int en) { static_cast<PowerWashTrainer*>(h)->SetFeatureEnabled(id, en); }
+    __declspec(dllexport) void trainer_activate_feature(void* h, const char* id) { static_cast<PowerWashTrainer*>(h)->ActivateFeature(id); }
+    __declspec(dllexport) void trainer_set_keybind(void* h, const char* id, int vk) { static_cast<PowerWashTrainer*>(h)->SetKeybind(id, vk); }
+    __declspec(dllexport) int trainer_get_keybind(void* h, const char* id) { return static_cast<PowerWashTrainer*>(h)->GetKeybind(id); }
     __declspec(dllexport) const char* trainer_get_last_error() { return g_lastError; }
 }
