@@ -18,8 +18,20 @@
             ]
           },
           "features": [
-            { "id": "add_gold",      "name": "Add Gold",      "description": "Set gold to 9999",    "is_toggle": false, "default_vk": 112 },
-            { "id": "add_secondary", "name": "Add Secondary", "description": "Set secondary to 99", "is_toggle": false, "default_vk": 113 }
+            {
+              "id": "add_gold",
+              "name": "Add Gold",
+              "description": "Set gold to 9999",
+              "is_toggle": false,
+              "default_vk": 112
+            },
+            {
+              "id": "add_secondary",
+              "name": "Add Secondary",
+              "description": "Set secondary to 99",
+              "is_toggle": false,
+              "default_vk": 113
+            }
           ]
         }
       ]
@@ -41,13 +53,55 @@
             ]
           },
           "features": [
-            { "id": "lock_health",   "name": "Lock Health",      "description": "Keep health at maximum",        "is_toggle": true,  "default_vk": 112 },
-            { "id": "lock_stamina",  "name": "Lock Stamina",     "description": "Keep stamina at maximum",       "is_toggle": true,  "default_vk": 113 },
-            { "id": "add_money",     "name": "Add $10,000",      "description": "Add $10,000 to wallet",         "is_toggle": false, "default_vk": 114 },
-            { "id": "instant_bite",  "name": "Instant Bite",     "description": "Fish bite immediately",         "is_toggle": true,  "default_vk": 115 },
-            { "id": "instant_catch", "name": "Instant Catch",    "description": "Fishing bar always full",       "is_toggle": true,  "default_vk": 116 },
-            { "id": "max_quality",   "name": "Max Fish Quality", "description": "Iridium quality + treasure",    "is_toggle": true,  "default_vk": 117 },
-            { "id": "speed_hack",    "name": "Speed Hack",       "description": "Add +10 movement speed bonus",  "is_toggle": true,  "default_vk": 118 }
+            {
+              "id": "lock_health",
+              "name": "Lock Health",
+              "description": "Keep health at maximum",
+              "is_toggle": true,
+              "default_vk": 112
+            },
+            {
+              "id": "lock_stamina",
+              "name": "Lock Stamina",
+              "description": "Keep stamina at maximum",
+              "is_toggle": true,
+              "default_vk": 113
+            },
+            {
+              "id": "add_money",
+              "name": "Add $10,000",
+              "description": "Add $10,000 to wallet",
+              "is_toggle": false,
+              "default_vk": 114
+            },
+            {
+              "id": "instant_bite",
+              "name": "Instant Bite",
+              "description": "Fish bite immediately",
+              "is_toggle": true,
+              "default_vk": 115
+            },
+            {
+              "id": "instant_catch",
+              "name": "Instant Catch",
+              "description": "Fishing bar always full",
+              "is_toggle": true,
+              "default_vk": 116
+            },
+            {
+              "id": "max_quality",
+              "name": "Max Fish Quality",
+              "description": "Iridium quality + treasure",
+              "is_toggle": true,
+              "default_vk": 117
+            },
+            {
+              "id": "speed_hack",
+              "name": "Speed Hack",
+              "description": "Add +10 movement speed bonus",
+              "is_toggle": true,
+              "default_vk": 118
+            }
           ]
         }
       ]
@@ -69,37 +123,223 @@
             ]
           },
           "features": [
-            { "id": "fly_up",          "name": "Fly Up",           "description": "Move goat up by fly force",          "is_toggle": false, "default_vk": 99  },
-            { "id": "fly_down",        "name": "Fly Down",         "description": "Move goat down by fly force",        "is_toggle": false, "default_vk": 100 },
-            { "id": "hover_mode",      "name": "Hover Mode",       "description": "Lock goat height in place",          "is_toggle": true,  "default_vk": 102 },
-            { "id": "anti_aim",        "name": "Anti-Aim",         "description": "Spin goat yaw continuously",         "is_toggle": true,  "default_vk": 0   },
-            { "id": "teleport",        "name": "Save/Restore Pos", "description": "First press saves, second restores", "is_toggle": false, "default_vk": 103 },
-            { "id": "tp_origin",       "name": "TP to Origin",     "description": "Teleport to trainer load position",  "is_toggle": false, "default_vk": 0   },
-            { "id": "chunky_mode",     "name": "Chunky Mode",      "description": "Toggle chunky goat hitbox",          "is_toggle": true,  "default_vk": 0   },
-            { "id": "max_speed",       "name": "Max Speed",        "description": "Set tick speed to 1000",             "is_toggle": false, "default_vk": 0   },
-            { "id": "normal_speed",    "name": "Normal Speed",     "description": "Reset tick speed to 1.0",            "is_toggle": false, "default_vk": 0   },
-            { "id": "giant_goat",      "name": "Giant Goat",       "description": "Set goat size to 100",               "is_toggle": false, "default_vk": 0   },
-            { "id": "normal_size",     "name": "Normal Size",      "description": "Reset goat size to 1",               "is_toggle": false, "default_vk": 0   },
-            { "id": "add_score",       "name": "Add 9999 Score",   "description": "Add 9999 to current score",          "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_flappy_goat",  "name": "TP: Flappy Goat",  "description": "Goatvile — Flappy Goat minigame",    "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_sacrifice",    "name": "TP: Sacrifice",    "description": "Goatvile — Sacrifice jahit",         "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_roboter",      "name": "TP: Da Roboter",   "description": "Goatvile — Da Roboter",              "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_goat_house",   "name": "TP: Goat House",   "description": "Goatvile — Goat House",              "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_goat_kingdom", "name": "TP: Goat Kingdom", "description": "Goatvile — Goat Kingdom",            "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_skate_park",   "name": "TP: Skate Park",   "description": "Goatcity — Skate Park",              "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_dude_dancing", "name": "TP: Dude Dancing", "description": "Goatcity — Dude Dancing",            "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_drug_island",  "name": "TP: Drug Island",  "description": "Goatcity — Drug Island",             "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_graveyard",    "name": "TP: Graveyard",    "description": "Goatcity — Graveyard",               "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_minecraft",    "name": "TP: Minecraft",    "description": "Goatcity — Minecraft Block",         "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_fun",          "name": "TP: Fun",          "description": "Goatcity — Fun area",                "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_ninja_shreks", "name": "TP: Ninja Shreks", "description": "Goatcity — Ninja Shreks",            "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_casino",       "name": "TP: Casino",       "description": "Goatcity — Casino",                  "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_battery_1",    "name": "TP: Battery 1",    "description": "Goatcity — Battery Spot 1",          "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_battery_2",    "name": "TP: Battery 2",    "description": "Goatcity — Battery Spot 2",          "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_battery_3",    "name": "TP: Battery 3",    "description": "Goatcity — Battery Spot 3",          "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_battery_4",    "name": "TP: Battery 4",    "description": "Goatcity — Battery Spot 4",          "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_battery_5",    "name": "TP: Battery 5",    "description": "Goatcity — Battery Spot 5",          "is_toggle": false, "default_vk": 0   },
-            { "id": "tp_battery_6",    "name": "TP: Battery 6",    "description": "Goatcity — Battery Spot 6",          "is_toggle": false, "default_vk": 0   }
+            {
+              "id": "fly_up",
+              "name": "Fly Up",
+              "description": "Move goat up by fly force",
+              "is_toggle": false,
+              "default_vk": 99
+            },
+            {
+              "id": "fly_down",
+              "name": "Fly Down",
+              "description": "Move goat down by fly force",
+              "is_toggle": false,
+              "default_vk": 100
+            },
+            {
+              "id": "hover_mode",
+              "name": "Hover Mode",
+              "description": "Lock goat height in place",
+              "is_toggle": true,
+              "default_vk": 102
+            },
+            {
+              "id": "anti_aim",
+              "name": "Anti-Aim",
+              "description": "Spin goat yaw continuously",
+              "is_toggle": true,
+              "default_vk": 0
+            },
+            {
+              "id": "teleport",
+              "name": "Save/Restore Pos",
+              "description": "First press saves, second restores",
+              "is_toggle": false,
+              "default_vk": 103
+            },
+            {
+              "id": "tp_origin",
+              "name": "TP to Origin",
+              "description": "Teleport to trainer load position",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "chunky_mode",
+              "name": "Chunky Mode",
+              "description": "Toggle chunky goat hitbox",
+              "is_toggle": true,
+              "default_vk": 0
+            },
+            {
+              "id": "max_speed",
+              "name": "Max Speed",
+              "description": "Set tick speed to 1000",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "normal_speed",
+              "name": "Normal Speed",
+              "description": "Reset tick speed to 1.0",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "giant_goat",
+              "name": "Giant Goat",
+              "description": "Set goat size to 100",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "normal_size",
+              "name": "Normal Size",
+              "description": "Reset goat size to 1",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "add_score",
+              "name": "Add 9999 Score",
+              "description": "Add 9999 to current score",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_flappy_goat",
+              "name": "TP: Flappy Goat",
+              "description": "Goatvile \u2014 Flappy Goat minigame",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_sacrifice",
+              "name": "TP: Sacrifice",
+              "description": "Goatvile \u2014 Sacrifice jahit",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_roboter",
+              "name": "TP: Da Roboter",
+              "description": "Goatvile \u2014 Da Roboter",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_goat_house",
+              "name": "TP: Goat House",
+              "description": "Goatvile \u2014 Goat House",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_goat_kingdom",
+              "name": "TP: Goat Kingdom",
+              "description": "Goatvile \u2014 Goat Kingdom",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_skate_park",
+              "name": "TP: Skate Park",
+              "description": "Goatcity \u2014 Skate Park",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_dude_dancing",
+              "name": "TP: Dude Dancing",
+              "description": "Goatcity \u2014 Dude Dancing",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_drug_island",
+              "name": "TP: Drug Island",
+              "description": "Goatcity \u2014 Drug Island",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_graveyard",
+              "name": "TP: Graveyard",
+              "description": "Goatcity \u2014 Graveyard",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_minecraft",
+              "name": "TP: Minecraft",
+              "description": "Goatcity \u2014 Minecraft Block",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_fun",
+              "name": "TP: Fun",
+              "description": "Goatcity \u2014 Fun area",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_ninja_shreks",
+              "name": "TP: Ninja Shreks",
+              "description": "Goatcity \u2014 Ninja Shreks",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_casino",
+              "name": "TP: Casino",
+              "description": "Goatcity \u2014 Casino",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_battery_1",
+              "name": "TP: Battery 1",
+              "description": "Goatcity \u2014 Battery Spot 1",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_battery_2",
+              "name": "TP: Battery 2",
+              "description": "Goatcity \u2014 Battery Spot 2",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_battery_3",
+              "name": "TP: Battery 3",
+              "description": "Goatcity \u2014 Battery Spot 3",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_battery_4",
+              "name": "TP: Battery 4",
+              "description": "Goatcity \u2014 Battery Spot 4",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_battery_5",
+              "name": "TP: Battery 5",
+              "description": "Goatcity \u2014 Battery Spot 5",
+              "is_toggle": false,
+              "default_vk": 0
+            },
+            {
+              "id": "tp_battery_6",
+              "name": "TP: Battery 6",
+              "description": "Goatcity \u2014 Battery Spot 6",
+              "is_toggle": false,
+              "default_vk": 0
+            }
           ]
         }
       ]
@@ -113,7 +353,7 @@
           "release_tag": "WeLoveKatamariREROLL-1.0.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "08e2d744580fc9803af2daa43071cadb51d813fa32310b96a19315b376e3e3d4",
+          "sha256": "164a435fb74f7dd37fece2fe7fb1c568073fa487538494a902b5fde8af20f798",
           "version_constraint": {
             "type": "exact",
             "builds": [
@@ -121,8 +361,20 @@
             ]
           },
           "features": [
-            { "id": "end_level",   "name": "End Level",   "description": "Set countdown to 0 — ends level on next tick", "is_toggle": true, "default_vk": 112 },
-            { "id": "freeze_time", "name": "Freeze Time", "description": "Freeze timer display and countdown",           "is_toggle": true, "default_vk": 113 }
+            {
+              "id": "end_level",
+              "name": "End Level",
+              "description": "Set countdown to 0 \u2014 ends level on next tick",
+              "is_toggle": true,
+              "default_vk": 112
+            },
+            {
+              "id": "freeze_time",
+              "name": "Freeze Time",
+              "description": "Freeze timer display and countdown",
+              "is_toggle": true,
+              "default_vk": 113
+            }
           ]
         }
       ]
@@ -143,7 +395,13 @@
             "max_build": "14199999"
           },
           "features": [
-            { "id": "godmode", "name": "God Mode", "description": "Zero incoming damage", "is_toggle": true, "default_vk": 112 }
+            {
+              "id": "godmode",
+              "name": "God Mode",
+              "description": "Zero incoming damage",
+              "is_toggle": true,
+              "default_vk": 112
+            }
           ]
         }
       ]
