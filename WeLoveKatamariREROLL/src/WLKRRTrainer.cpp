@@ -236,77 +236,85 @@ private:
     // ── Scan ──────────────────────────────────────────────────────────────────
 
     bool ScanPatterns(DWORD pid) {
-        uintptr_t gaBase = 0; size_t gaSize = 0;
-        if (!GetModuleInfo(pid, L"GameAssembly.dll", gaBase, gaSize)) {
-            SetLastErr("GameAssembly.dll not found — game may still be loading");
-            return false;
-        }
+    char buf[256];
 
-        // Countdown pattern — must appear at least twice:
-        //   hits[0] = freeze site  (~GameAssembly.dll+62E218)
-        //   hits[1] = end-level site (~GameAssembly.dll+638958)
-        static const uint8_t PAT_CD[] = {
-            0x89,0x4A,0x3C, 0x48,0x83,0xC4,0x28, 0xC3, 0xE8
-        };
-        auto cdHits = AobAll(m_hProc, gaBase, gaSize, PAT_CD, sizeof(PAT_CD));
-        if (cdHits.size() < 2) {
-            char buf[128];
-            wsprintfA(buf, "countdown pattern: need >=2 matches, found %zu — wrong build?",
-                      cdHits.size());
-            SetLastErr(buf);
-            return false;
-        }
-
-        // Time increment — first match
-        static const uint8_t PAT_TI[] = {
-            0xFF,0x41,0x40, 0x48,0x83,0xC4,0x28
-        };
-        uintptr_t tiAddr = AobFirst(m_hProc, gaBase, gaSize, PAT_TI, sizeof(PAT_TI));
-        if (!tiAddr) {
-            SetLastErr("time increment pattern not found — wrong build?");
-            return false;
-        }
-
-        // ── siteCountdown (NOP 3 bytes at hits[0]) ────────────────────────────
-        m_siteCountdown.addr = cdHits[0];
-        m_siteCountdown.len  = 3;
-        ReadProcessMemory(m_hProc, (LPCVOID)cdHits[0], m_siteCountdown.orig, 3, nullptr);
-
-        // ── siteTimeInc (NOP 3 bytes) ─────────────────────────────────────────
-        m_siteTimeInc.addr = tiAddr;
-        m_siteTimeInc.len  = 3;
-        ReadProcessMemory(m_hProc, (LPCVOID)tiAddr, m_siteTimeInc.orig, 3, nullptr);
-
-        // ── siteEndLevel (code cave, 7 bytes at hits[1]) ─────────────────────
-        // Original 7 bytes: 89 4A 3C (mov [rdx+3C],ecx) + 48 83 C4 28 (add rsp,28)
-        // Cave: C7 42 3C 00 00 00 00 (mov [rdx+3C],0) + 48 83 C4 28 + E9 rel32 (jmp back)
-        uintptr_t elAddr = cdHits[1];
-        uintptr_t cave   = AllocNear(m_hProc, elAddr, 32);
-        if (!cave) {
-            SetLastErr("failed to allocate code cave for end_level");
-            return false;
-        }
-
-        m_siteEndLevel.addr = elAddr;
-        m_siteEndLevel.len  = 7;
-        m_siteEndLevel.cave = cave;
-        ReadProcessMemory(m_hProc, (LPCVOID)elAddr, m_siteEndLevel.orig, 7, nullptr);
-
-        // Build cave:
-        //   [0..6]  C7 42 3C 00 00 00 00  — mov dword [rdx+3C], 0
-        //   [7..10] 48 83 C4 28           — add rsp, 28
-        //   [11..15] E9 xx xx xx xx       — jmp elAddr+7
-        uint8_t caveBytes[16] = {};
-        caveBytes[0]=0xC7; caveBytes[1]=0x42; caveBytes[2]=0x3C;
-        caveBytes[3]=0x00; caveBytes[4]=0x00; caveBytes[5]=0x00; caveBytes[6]=0x00;
-        caveBytes[7]=0x48; caveBytes[8]=0x83; caveBytes[9]=0xC4; caveBytes[10]=0x28;
-        caveBytes[11]=0xE9;
-        int32_t rel = static_cast<int32_t>((elAddr + 7) - (cave + 11) - 5);
-        memcpy(&caveBytes[12], &rel, 4);
-        WriteProcessMemory(m_hProc, (LPVOID)cave, caveBytes, sizeof(caveBytes), nullptr);
-
-        return true;
+    uintptr_t gaBase = 0; size_t gaSize = 0;
+    if (!GetModuleInfo(pid, L"GameAssembly.dll", gaBase, gaSize)) {
+        SetLastErr("GameAssembly.dll not found — game may still be loading");
+        return false;
     }
+
+    // ── Countdown pattern (>=2 required) ─────────────────────────────────────
+    static const uint8_t PAT_CD[] = {
+        0x89,0x4A,0x3C, 0x48,0x83,0xC4,0x28, 0xC3, 0xE8
+    };
+    bool readOk = false;
+    auto cdHits = AobAll(m_hProc, gaBase, gaSize, PAT_CD, sizeof(PAT_CD), &readOk);
+    if (!readOk) {
+        SetLastErr("ReadProcessMemory failed on GameAssembly.dll — "
+                   "run as administrator or wait for the game to finish loading");
+        return false;
+    }
+    if (cdHits.size() < 2) {
+        // FIX 1: snprintf, not wsprintfA, so %zu works correctly
+        snprintf(buf, sizeof(buf),
+                 "countdown pattern: need >=2 matches, found %zu — wrong build?",
+                 cdHits.size());
+        SetLastErr(buf);
+        return false;
+    }
+
+    // ── Time increment pattern ────────────────────────────────────────────────
+    static const uint8_t PAT_TI[] = {
+        0xFF,0x41,0x40, 0x48,0x83,0xC4,0x28
+    };
+    uintptr_t tiAddr = AobFirst(m_hProc, gaBase, gaSize, PAT_TI, sizeof(PAT_TI));
+    if (!tiAddr) {
+        SetLastErr("time increment pattern not found — wrong build?");
+        return false;
+    }
+
+    // ── siteCountdown ─────────────────────────────────────────────────────────
+    m_siteCountdown.addr = cdHits[0];
+    m_siteCountdown.len  = 3;
+    ReadProcessMemory(m_hProc, (LPCVOID)cdHits[0], m_siteCountdown.orig, 3, nullptr);
+
+    // ── siteTimeInc ───────────────────────────────────────────────────────────
+    m_siteTimeInc.addr = tiAddr;
+    m_siteTimeInc.len  = 3;
+    ReadProcessMemory(m_hProc, (LPCVOID)tiAddr, m_siteTimeInc.orig, 3, nullptr);
+
+    // ── siteEndLevel (code cave) ──────────────────────────────────────────────
+    uintptr_t elAddr = cdHits[1];
+    uintptr_t cave   = AllocNear(m_hProc, elAddr, 32);
+    if (!cave) {
+        SetLastErr("failed to allocate code cave for end_level");
+        return false;
+    }
+
+    m_siteEndLevel.addr = elAddr;
+    m_siteEndLevel.len  = 7;
+    m_siteEndLevel.cave = cave;
+    ReadProcessMemory(m_hProc, (LPCVOID)elAddr, m_siteEndLevel.orig, 7, nullptr);
+
+    // Cave layout (16 bytes):
+    //   0..6   C7 42 3C 00 00 00 00  — mov dword [rdx+3C], 0
+    //   7..10  48 83 C4 28           — add rsp, 28
+    //   11     E9                    — JMP rel32 opcode
+    //   12..15 xx xx xx xx           — rel32: target = (elAddr+7) - (cave+16)
+    uint8_t caveBytes[16] = {};
+    caveBytes[0]=0xC7; caveBytes[1]=0x42; caveBytes[2]=0x3C;
+    caveBytes[3]=0x00; caveBytes[4]=0x00; caveBytes[5]=0x00; caveBytes[6]=0x00;
+    caveBytes[7]=0x48; caveBytes[8]=0x83; caveBytes[9]=0xC4; caveBytes[10]=0x28;
+    caveBytes[11]=0xE9;
+
+    // FIX 3: rip_after_jmp = cave+16, not cave+11+5 applied to wrong base
+    int32_t rel = static_cast<int32_t>((elAddr + 7) - (cave + 16));
+    memcpy(&caveBytes[12], &rel, 4);
+
+    WriteProcessMemory(m_hProc, (LPVOID)cave, caveBytes, sizeof(caveBytes), nullptr);
+    return true;
+}
 
     // ── Patch helpers ─────────────────────────────────────────────────────────
 
