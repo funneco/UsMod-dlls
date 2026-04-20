@@ -1,0 +1,10 @@
+{
+  "game_id": "265930",
+  "game_name": "GoatSimulator",
+  "game_version": "1.4.x",
+  "trainer_version": "1.0.0",
+  "version_constraint": {
+    "type": "exact",
+    "builds": ["1629888"]
+  }
+}
