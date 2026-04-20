@@ -388,7 +388,7 @@
           "release_tag": "PowerwashSimulator-1.0.1f-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "14a199090a3096a2affbc7a126b8c39f12b3a5b80338a36995de42e87346f59e",
+          "sha256": "e2303045b0726bfc7bf20a4df17699e708bd9d8bf1eda5ce2d9b399b73c6b356",
           "version_constraint": {
             "type": "range",
             "min_build": "20240979",
