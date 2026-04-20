@@ -147,17 +147,27 @@ public:
 
             // Logic for Show Dirt
             it++;
-            if (it->enabled != p2 && m_siteDirt.cave) {
-                if (it->enabled) {
-                    uint8_t j[5] = { 0xE9,0,0,0,0 }; 
-                    int32_t r = (int32_t)(m_siteDirt.cave - m_siteDirt.addr - 5); 
-                    memcpy(&j[1], &r, 4); 
-                    MemWrite(m_hProc, m_siteDirt.addr, j, 5);
-                } else {
-                    MemWrite(m_hProc, m_siteDirt.addr, m_siteDirt.orig, 5);
-                }
-                p2 = it->enabled;
-            }
+            if (it->enabled != p2 && m_siteDirt.addr) {
+    if (it->enabled) {
+        // We need to overwrite 10 bytes to be safe (the length of the instructions in the AOB)
+        // 1. The Jump (5 bytes)
+        // 2. NOPs (5 bytes) to clean up the rest of the original instructions
+        uint8_t patch[10] = { 0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90 };
+        
+        // Calculate relative offset for the jump to your codecave
+        int32_t relativeAddr = (int32_t)(m_siteDirt.cave - m_siteDirt.addr - 5);
+        memcpy(&patch[1], &relativeAddr, 4);
+
+        // Write all 10 bytes at once
+        MemWrite(m_hProc, m_siteDirt.addr, patch, 10);
+    } else {
+        // Restore all 10 bytes from the original scan
+        // This MUST match the original bytes: F3 0F 11 43 38 F3 0F 10 43 28
+        uint8_t original[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x43, 0x28 };
+        MemWrite(m_hProc, m_siteDirt.addr, original, 10);
+    }
+    p2 = it->enabled;
+}
             Sleep(10);
         }
     }
