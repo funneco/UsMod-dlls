@@ -1,0 +1,10 @@
+{
+  "game_id": "1290000",
+  "game_name": "PowerwashSimulator",
+  "game_version": "1.0.1f",
+  "trainer_version": "1.0.0",
+  "version_constraint": {
+    "type": "exact",
+    "builds": ["20240979"]
+  }
+}

@@ -380,25 +380,25 @@
       ]
     },
     {
-      "game_id": "1091500",
-      "game_name": "Cyberpunk2077",
+      "game_id": "1290000",
+      "game_name": "PowerwashSimulator",
       "entries": [
         {
           "trainer_version": "1.0.0",
-          "release_tag": "Cyberpunk2077-2.12-1.0.0",
+          "release_tag": "PowerwashSimulator-2.12-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "6795cf12d3d5a34d8dfa82509c02bfffc37d5ff3ac4064709e8da04618193f87",
+          "sha256": "",
           "version_constraint": {
             "type": "range",
-            "min_build": "14000000",
-            "max_build": "14199999"
+            "min_build": "20240979",
+            "max_build": "20240979"
           },
           "features": [
             {
-              "id": "godmode",
-              "name": "God Mode",
-              "description": "Zero incoming damage",
+              "id": "instant_wash",
+              "name": "Instant Wash",
+              "description": "Sets effectiveness to 10,000",
               "is_toggle": true,
               "default_vk": 112
             }
