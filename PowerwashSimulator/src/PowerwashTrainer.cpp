@@ -2,7 +2,9 @@
 #include <windows.h>
 #include <thread>
 #include <atomic>
+#include <list>
 #include <vector>
+#include <cstring>
 
 // --- Mono API Function Signatures ---
 typedef void* (*mono_get_root_domain)();
@@ -28,7 +30,6 @@ struct Feature {
 class PowerWashTrainer {
 public:
     PowerWashTrainer() : m_running(false), m_patchAddr(0) {
-        // Feature ID "instant_wash", Name "Instant Wash", Description, IsToggle = 1, Default Key = F1
         m_features.emplace_back("instant_wash", "Instant Wash", "Sets effectiveness to 10,000", 1, VK_F1);
     }
 
@@ -38,7 +39,6 @@ public:
         m_patchAddr = GetMonoMethodAddress();
         if (!m_patchAddr) return false;
 
-        // Store original bytes for safe disabling
         memcpy(m_originalBytes, (void*)m_patchAddr, sizeof(CLEAN_PATCH));
 
         m_running = true;
@@ -49,17 +49,18 @@ public:
     void Shutdown() {
         m_running = false;
         if (m_thread.joinable()) m_thread.join();
-        TogglePatch(false); // Restore original code on exit
+        TogglePatch(false);
     }
 
-    // --- ITrainerModule Interface Implementation ---
     const char* GetName()    const { return "PowerWash Simulator Trainer"; }
     const char* GetVersion() const { return "1.1.0"; }
     int GetFeatureCount()    const { return (int)m_features.size(); }
 
     const TrainerFeatureInfo* GetFeatureInfo(int idx) const {
-        if (idx < 0 || idx >= m_features.size()) return nullptr;
-        return &m_features[idx].info;
+        if (idx < 0 || idx >= (int)m_features.size()) return nullptr;
+        auto it = m_features.begin();
+        std::advance(it, idx);
+        return &it->info;
     }
 
     int GetFeatureEnabled(const char* id) const {
@@ -78,16 +79,14 @@ public:
         }
     }
 
-    void ActivateFeature(const char* id) {
-        // For non-toggle buttons, put logic here.
-    }
+    void ActivateFeature(const char* /*id*/) {}
 
 private:
     std::atomic<bool> m_running;
     uintptr_t m_patchAddr;
     uint8_t m_originalBytes[sizeof(CLEAN_PATCH)];
     std::thread m_thread;
-    std::vector<Feature> m_features;
+    std::list<Feature> m_features;
 
     uintptr_t GetMonoMethodAddress() {
         HMODULE hMono = GetModuleHandleA("mono-2.0-bdwgc.dll");
@@ -104,35 +103,25 @@ private:
         void* domain = GetRootDomain();
         ThreadAttach(domain);
 
-        // GameAssembly.dll contains the PWS namespace
         void* assembly = AssemblyOpen(domain, "GameAssembly.dll");
         if (!assembly) return 0;
         void* image = AssemblyGetImage(assembly);
 
-        // Find PWS.WasherClassNozzleSettings
         void* klass = ClassFromName(image, "PWS", "WasherClassNozzleSettings");
         if (!klass) return 0;
 
-        // Find GetEffectivenessAgainst(target)
         void* method = GetMethodFromName(klass, "GetEffectivenessAgainst", 1);
         if (!method) return 0;
 
-        // Compile and return pointer
         return (uintptr_t)CompileMethod(method);
     }
 
     void TogglePatch(bool enable) {
         if (!m_patchAddr) return;
-
         DWORD oldProtect;
         VirtualProtect((void*)m_patchAddr, sizeof(CLEAN_PATCH), PAGE_EXECUTE_READWRITE, &oldProtect);
-        
-        if (enable) {
-            memcpy((void*)m_patchAddr, CLEAN_PATCH, sizeof(CLEAN_PATCH));
-        } else {
-            memcpy((void*)m_patchAddr, m_originalBytes, sizeof(CLEAN_PATCH));
-        }
-
+        if (enable) memcpy((void*)m_patchAddr, CLEAN_PATCH, sizeof(CLEAN_PATCH));
+        else memcpy((void*)m_patchAddr, m_originalBytes, sizeof(CLEAN_PATCH));
         VirtualProtect((void*)m_patchAddr, sizeof(CLEAN_PATCH), oldProtect, &oldProtect);
     }
 
@@ -150,7 +139,6 @@ private:
     }
 };
 
-// --- C ABI Exports ---
 extern "C" {
     __declspec(dllexport) void* trainer_create() { return new PowerWashTrainer(); }
     __declspec(dllexport) void  trainer_destroy(void* h) { delete static_cast<PowerWashTrainer*>(h); }
