@@ -1,9 +1,6 @@
-// PowerWash Simulator Trainer
-// Target: PowerWashSimulator.exe, IL2CPP module: GameAssembly.dll
-//
-// Pattern: GetEffectivenessAgainst
-// 48 83 EC 28 81 FA 00 01 00 00 -> Function Start
-// Shellcode: mov eax, 10000; cvtsi2ss xmm0, eax; ret
+// PowerWash Simulator Trainer (Steam Version)
+// Target: PowerWashSimulator.exe
+// Module: GameAssembly.dll
 
 #include "ITrainerModule.h"
 #include <windows.h>
@@ -33,7 +30,7 @@ static DWORD FindPid(const wchar_t* exe) {
 }
 
 static bool GetModuleInfo(DWORD pid, const wchar_t* mod, uintptr_t& base, size_t& sz) {
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (snap == INVALID_HANDLE_VALUE) return false;
     MODULEENTRY32W me{ sizeof(me) };
     bool found = false;
@@ -50,97 +47,82 @@ static bool GetModuleInfo(DWORD pid, const wchar_t* mod, uintptr_t& base, size_t
     return found;
 }
 
-static bool MemWriteRaw(HANDLE hProc, uintptr_t addr, const void* data, size_t size) {
+static bool MemWrite(HANDLE hProc, uintptr_t addr, const void* data, size_t size) {
     DWORD old;
-    VirtualProtectEx(hProc, (LPVOID)addr, size, PAGE_EXECUTE_READWRITE, &old);
+    if (!VirtualProtectEx(hProc, (LPVOID)addr, size, PAGE_EXECUTE_READWRITE, &old)) return false;
     SIZE_T r;
     bool ok = WriteProcessMemory(hProc, (LPVOID)addr, data, size, &r);
     VirtualProtectEx(hProc, (LPVOID)addr, size, old, &old);
+    FlushInstructionCache(hProc, (LPVOID)addr, size);
     return ok && r == size;
 }
 
-static uintptr_t AobFirst(HANDLE hProc, uintptr_t base, size_t sz, const uint8_t* pat, size_t len) {
+static uintptr_t AobScan(HANDLE hProc, uintptr_t base, size_t sz, const uint8_t* pat, const char* mask) {
     std::vector<uint8_t> buf(sz);
     SIZE_T r = 0;
     if (!ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r) || r == 0) return 0;
-    for (size_t i = 0; i + len <= r; ++i)
-        if (memcmp(buf.data() + i, pat, len) == 0) return base + i;
+    size_t len = strlen(mask);
+    for (size_t i = 0; i + len <= r; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < len; ++j) {
+            if (mask[j] == 'x' && buf[i + j] != pat[j]) { match = false; break; }
+        }
+        if (match) return base + i;
+    }
     return 0;
 }
 
-// ── Structures ────────────────────────────────────────────────────────────────
-
 struct PatchSite {
     uintptr_t addr = 0;
-    uint8_t   orig[10] = {};
-    size_t    len = 10;
-    bool      active = false;
+    std::vector<uint8_t> orig;
+    bool active = false;
 };
 
 struct Feature {
     TrainerFeatureInfo info;
-    std::atomic<bool>  enabled{ false };
-    std::atomic<int>   vk_code{ 0 };
-    Feature(const char* id_, const char* n, const char* d, int tog, int vk)
-        : info{ id_, n, d, tog, vk }, vk_code(vk) {}
+    std::atomic<bool> enabled{ false };
+    std::atomic<int> vk_code{ 0 };
+    Feature(const char* id, const char* n, const char* d, int tog, int vk)
+        : info{ id, n, d, tog, vk }, vk_code(vk) {}
 };
 
-// ── Trainer Class ─────────────────────────────────────────────────────────────
-
-class PWSTrainer {
+class PWSTrainerSteam {
 public:
-    PWSTrainer() : m_running(false), m_hProc(nullptr) {
-        m_features.emplace_back("instant_clean", "Instant Clean", "One-tap any dirt surface", 1, VK_F1);
+    PWSTrainerSteam() : m_running(false), m_hProc(nullptr) {
+        m_features.emplace_back("instant_clean", "Instant Clean", "Force 100% Cleaning Power", 1, VK_F1);
         m_fInstantClean = &m_features.back();
     }
 
-    ~PWSTrainer() { Shutdown(); }
-
     bool Initialize() {
-    DWORD pid = FindPid(L"PowerWashSimulator.exe");
-    if (!pid) {
-        SetLastErr("Process not found - Start the game first.");
-        return false;
-    }
+        DWORD pid = FindPid(L"PowerWashSimulator.exe");
+        if (!pid) { SetLastErr("Steam Version not running."); return false; }
 
-    m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-    if (!m_hProc) {
-        SetLastErr("OpenProcess failed - Run as Admin.");
-        return false;
-    }
+        m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+        if (!m_hProc) { SetLastErr("Admin privileges required."); return false; }
 
-    uintptr_t base = 0; size_t sz = 0;
-    if (!GetModuleInfo(pid, L"GameAssembly.dll", base, sz)) {
-        SetLastErr("GameAssembly.dll not found. Wait for the level to load.");
-        return false;
-    }
-
-    // New, more resilient pattern
-    static const uint8_t PAT_CLEAN[] = { 0x48, 0x83, 0xEC, 0x28, 0x81, 0xFA };
-    m_siteClean.addr = AobFirst(m_hProc, base, sz, PAT_CLEAN, sizeof(PAT_CLEAN));
-
-    if (!m_siteClean.addr) {
-        // Fallback: search for the second half of the nozzle logic if start is obscured
-        static const uint8_t FALLBACK_PAT[] = { 0x81, 0xFA, 0x00, 0x01, 0x00, 0x00 };
-        m_siteClean.addr = AobFirst(m_hProc, base, sz, FALLBACK_PAT, sizeof(FALLBACK_PAT));
-        
-        if (m_siteClean.addr) {
-            m_siteClean.addr -= 4; // Move back to the start of the function (sub rsp, 28)
+        uintptr_t base = 0; size_t sz = 0;
+        if (!GetModuleInfo(pid, L"GameAssembly.dll", base, sz)) {
+            SetLastErr("GameAssembly.dll not found."); return false;
         }
+
+        // Updated Steam Pattern for the Nozzle Effectiveness check
+        // Looking for: comviss xmm0, xmm1 | jbe ... | movss ...
+        static const uint8_t PAT_CLEAN[] = { 0x0F, 0x2F, 0xC1, 0x76, 0x00, 0xF3, 0x0F, 0x10 };
+        static const char* MASK_CLEAN = "xxxx?xxx";
+        
+        m_siteClean.addr = AobScan(m_hProc, base, sz, PAT_CLEAN, MASK_CLEAN);
+        if (!m_siteClean.addr) {
+            SetLastErr("Steam-specific pattern not found.");
+            return false;
+        }
+
+        m_siteClean.orig.resize(11); // Store the original instruction bytes
+        ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig.data(), 11, nullptr);
+
+        m_running = true;
+        m_thread = std::thread(&PWSTrainerSteam::Loop, this);
+        return true;
     }
-
-    if (!m_siteClean.addr) {
-        SetLastErr("AOB Scan failed. Game version may be incompatible.");
-        return false;
-    }
-
-    // Capture what was there to avoid crashing on toggle-off
-    ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 10, nullptr);
-
-    m_running = true;
-    m_thread = std::thread(&PWSTrainer::Loop, this);
-    return true;
-}
 
     void Shutdown() {
         m_running = false;
@@ -148,41 +130,29 @@ public:
         if (m_hProc) {
             if (m_siteClean.active) RestoreSite(m_siteClean);
             CloseHandle(m_hProc);
-            m_hProc = nullptr;
         }
     }
 
-    const char* GetName()    const { return "PowerWash Simulator Trainer"; }
-    const char* GetVersion() const { return "1.0.0"; }
-    int GetFeatureCount()    const { return (int)m_features.size(); }
-
+    // --- Interface Boilerplate ---
+    const char* GetName() const { return "PWS Steam Trainer"; }
+    const char* GetVersion() const { return "1.3.0"; }
+    int GetFeatureCount() const { return (int)m_features.size(); }
     const TrainerFeatureInfo* GetFeatureInfo(int idx) const {
-        auto it = m_features.begin();
-        std::advance(it, idx);
-        return &it->info;
+        auto it = m_features.begin(); std::advance(it, idx); return &it->info;
     }
-
     int GetFeatureEnabled(const char* id) const {
-        for (const auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) return f.enabled.load() ? 1 : 0;
+        for (const auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.enabled.load();
         return 0;
     }
-
-    void SetFeatureEnabled(const char* id, int enabled) {
-        for (auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) f.enabled = (enabled != 0);
+    void SetFeatureEnabled(const char* id, int en) {
+        for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.enabled = (en != 0);
     }
-
-    void ActivateFeature(const char* id) {}
-
+    void ActivateFeature(const char*) {}
     void SetKeybind(const char* id, int vk) {
-        for (auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) f.vk_code = vk;
+        for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.vk_code = vk;
     }
-
     int GetKeybind(const char* id) const {
-        for (const auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) return f.vk_code.load();
+        for (const auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.vk_code.load();
         return 0;
     }
 
@@ -191,58 +161,52 @@ private:
     HANDLE m_hProc;
     std::thread m_thread;
     std::list<Feature> m_features;
-    Feature* m_fInstantClean = nullptr;
+    Feature* m_fInstantClean;
     PatchSite m_siteClean;
 
     void ApplyCleanPatch() {
         if (m_siteClean.active) return;
-        // mov eax, 10000; cvtsi2ss xmm0, eax; ret (10 bytes total)
-        uint8_t patch[] = { 0xB8, 0x10, 0x27, 0x00, 0x00, 0xF3, 0x0F, 0x2A, 0xC0, 0xC3 };
-        MemWriteRaw(m_hProc, m_siteClean.addr, patch, 10);
-        m_siteClean.active = true;
+        // mov eax, 10000; cvtsi2ss xmm0, eax; ret instruction variant for mid-function
+        // This forces xmm0 to 10k right before the game uses it for the dirt calculation.
+        uint8_t patch[] = { 0xB8, 0x10, 0x27, 0x00, 0x00, 0xF3, 0x0F, 0x2A, 0xC0, 0x90, 0x90 };
+        if (MemWrite(m_hProc, m_siteClean.addr, patch, 11)) m_siteClean.active = true;
     }
 
     void RestoreSite(PatchSite& s) {
         if (!s.active) return;
-        MemWriteRaw(m_hProc, s.addr, s.orig, s.len);
-        s.active = false;
+        if (MemWrite(m_hProc, s.addr, s.orig.data(), s.orig.size())) s.active = false;
     }
 
     void Loop() {
-        bool prevClean = false;
+        bool prev = false;
         while (m_running) {
             for (auto& f : m_features) {
                 int vk = f.vk_code.load();
-                if (vk && (GetAsyncKeyState(vk) & 1))
-                    f.enabled = !f.enabled.load();
+                if (vk && (GetAsyncKeyState(vk) & 1)) f.enabled = !f.enabled.load();
             }
-
-            bool currentClean = m_fInstantClean->enabled.load();
-            if (currentClean != prevClean) {
-                if (currentClean) ApplyCleanPatch();
-                else RestoreSite(m_siteClean);
-                prevClean = currentClean;
+            bool cur = m_fInstantClean->enabled.load();
+            if (cur != prev) {
+                if (cur) ApplyCleanPatch(); else RestoreSite(m_siteClean);
+                prev = cur;
             }
-            Sleep(10);
+            Sleep(20);
         }
     }
 };
 
-// ── C ABI exports ─────────────────────────────────────────────────────────────
-
 extern "C" {
-    void* trainer_create() { return new PWSTrainer(); }
-    void  trainer_destroy(void* h) { delete static_cast<PWSTrainer*>(h); }
-    int   trainer_initialize(void* h) { return static_cast<PWSTrainer*>(h)->Initialize() ? 1 : 0; }
-    void  trainer_shutdown(void* h) { static_cast<PWSTrainer*>(h)->Shutdown(); }
-    const char* trainer_get_name(void* h) { return static_cast<PWSTrainer*>(h)->GetName(); }
-    const char* trainer_get_version(void* h) { return static_cast<PWSTrainer*>(h)->GetVersion(); }
-    int trainer_get_feature_count(void* h) { return static_cast<PWSTrainer*>(h)->GetFeatureCount(); }
-    const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx) { return static_cast<PWSTrainer*>(h)->GetFeatureInfo(idx); }
-    int trainer_get_feature_enabled(void* h, const char* id) { return static_cast<PWSTrainer*>(h)->GetFeatureEnabled(id); }
-    void trainer_set_feature_enabled(void* h, const char* id, int en) { static_cast<PWSTrainer*>(h)->SetFeatureEnabled(id, en); }
-    void trainer_activate_feature(void* h, const char* id) { static_cast<PWSTrainer*>(h)->ActivateFeature(id); }
-    void trainer_set_keybind(void* h, const char* id, int vk) { static_cast<PWSTrainer*>(h)->SetKeybind(id, vk); }
-    int trainer_get_keybind(void* h, const char* id) { return static_cast<PWSTrainer*>(h)->GetKeybind(id); }
-    const char* trainer_get_last_error() { return g_lastError; }
+    __declspec(dllexport) void* trainer_create() { return new PWSTrainerSteam(); }
+    __declspec(dllexport) void  trainer_destroy(void* h) { delete static_cast<PWSTrainerSteam*>(h); }
+    __declspec(dllexport) int   trainer_initialize(void* h) { return static_cast<PWSTrainerSteam*>(h)->Initialize() ? 1 : 0; }
+    __declspec(dllexport) void  trainer_shutdown(void* h) { static_cast<PWSTrainerSteam*>(h)->Shutdown(); }
+    __declspec(dllexport) const char* trainer_get_name(void* h) { return static_cast<PWSTrainerSteam*>(h)->GetName(); }
+    __declspec(dllexport) const char* trainer_get_version(void* h) { return static_cast<PWSTrainerSteam*>(h)->GetVersion(); }
+    __declspec(dllexport) int   trainer_get_feature_count(void* h) { return static_cast<PWSTrainerSteam*>(h)->GetFeatureCount(); }
+    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx) { return static_cast<PWSTrainerSteam*>(h)->GetFeatureInfo(idx); }
+    __declspec(dllexport) int   trainer_get_feature_enabled(void* h, const char* id) { return static_cast<PWSTrainerSteam*>(h)->GetFeatureEnabled(id); }
+    __declspec(dllexport) void  trainer_set_feature_enabled(void* h, const char* id, int en) { static_cast<PWSTrainerSteam*>(h)->SetFeatureEnabled(id, en); }
+    __declspec(dllexport) void  trainer_activate_feature(void* h, const char* id) { static_cast<PWSTrainerSteam*>(h)->ActivateFeature(id); }
+    __declspec(dllexport) void  trainer_set_keybind(void* h, const char* id, int vk) { static_cast<PWSTrainerSteam*>(h)->SetKeybind(id, vk); }
+    __declspec(dllexport) int   trainer_get_keybind(void* h, const char* id) { return static_cast<PWSTrainerSteam*>(h)->GetKeybind(id); }
+    __declspec(dllexport) const char* trainer_get_last_error() { return g_lastError; }
 }
