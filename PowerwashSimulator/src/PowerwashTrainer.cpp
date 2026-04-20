@@ -15,9 +15,6 @@ struct TrainerFeatureInfo {
     int hotkey;
 };
 
-static char g_lastError[256] = "";
-static void SetLastErr(const char* msg) { strncpy(g_lastError, msg, sizeof(g_lastError) - 1); }
-
 // --- Utilities ---
 static DWORD FindPid(const wchar_t* exe) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -47,7 +44,6 @@ static bool MemWrite(HANDLE hProc, uintptr_t addr, const void* data, size_t size
     SIZE_T r;
     bool ok = WriteProcessMemory(hProc, (LPVOID)addr, data, size, &r);
     VirtualProtectEx(hProc, (LPVOID)addr, size, old, &old);
-    FlushInstructionCache(hProc, (LPVOID)addr, size);
     return ok;
 }
 
@@ -80,12 +76,11 @@ public:
     std::thread m_thread;
     std::list<Feature> m_features;
 
-    // Separate storage for each patch to avoid buffer overflows or truncation
     uintptr_t addrClean = 0;
     uint8_t origClean[10] = { 0 };
 
     uintptr_t addrDirt = 0;
-    uint8_t origDirt[5] = { 0 };
+    uint8_t origDirt[14] = { 0 }; // Increased for Absolute Jump safety
     uintptr_t caveDirt = 0;
 
     PowerWashTrainer() {
@@ -100,35 +95,36 @@ public:
         uintptr_t gaBase = GetModuleBase(pid, L"GameAssembly.dll");
         if (!gaBase) return false;
 
-        // --- Instant Clean Setup ---
+        // Instant Clean
         addrClean = gaBase + 0xDF4790;
         ReadProcessMemory(m_hProc, (LPCVOID)addrClean, origClean, 10, nullptr);
 
-        // --- Show Dirt Setup (Matching your working CE script) ---
+        // Show Dirt
         uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x00, 0x28 };
         addrDirt = AobScan(m_hProc, gaBase, 0x3000000, pat, 10);
 
         if (addrDirt) {
-            ReadProcessMemory(m_hProc, (LPCVOID)addrDirt, origDirt, 5, nullptr);
+            ReadProcessMemory(m_hProc, (LPCVOID)addrDirt, origDirt, 14, nullptr);
             caveDirt = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             
             float glow_val = 1.0f;
-            uintptr_t glow_addr = caveDirt + 0x100;
+            uintptr_t glow_data = caveDirt + 0x200;
 
             uint8_t code[] = { 
-                0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0, [glow]
+                0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0, [glow_data]
                 0xF3, 0x0F, 0x11, 0x43, 0x38,                   // movss [rbx+38], xmm0
-                0xE9, 0x00, 0x00, 0x00, 0x00                    // jmp back
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp qword ptr [back]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // back address
             };
 
-            int32_t glow_off = (int32_t)(glow_addr - (caveDirt + 8));
+            int32_t glow_off = (int32_t)(glow_data - (caveDirt + 8));
             memcpy(&code[4], &glow_off, 4);
 
-            int32_t ret_off = (int32_t)((addrDirt + 5) - (caveDirt + 18));
-            memcpy(&code[14], &ret_off, 4);
+            uintptr_t retAddr = addrDirt + 10; // Jumping back past original instructions
+            memcpy(&code[20], &retAddr, 8);
 
             WriteProcessMemory(m_hProc, (LPVOID)caveDirt, code, sizeof(code), nullptr);
-            WriteProcessMemory(m_hProc, (LPVOID)glow_addr, &glow_val, 4, nullptr);
+            WriteProcessMemory(m_hProc, (LPVOID)glow_data, &glow_val, 4, nullptr);
         }
 
         m_running = true;
@@ -145,11 +141,11 @@ public:
             }
 
             auto it = m_features.begin();
-            // Instant Clean Patch (10 Bytes)
+            // Feature 1: Instant Clean
             if (it->enabled != p1) {
                 if (it->enabled) {
-                    uint8_t p[10] = { 0xB8,0x10,0x27,0x00,0x00,0xF3,0x0F,0x2A,0xC0,0xC3 }; 
-                    MemWrite(m_hProc, addrClean, p, 10);
+                    uint8_t patch[10] = { 0xB8,0x10,0x27,0x00,0x00,0xF3,0x0F,0x2A,0xC0,0xC3 }; 
+                    MemWrite(m_hProc, addrClean, patch, 10);
                 } else {
                     MemWrite(m_hProc, addrClean, origClean, 10);
                 }
@@ -157,15 +153,14 @@ public:
             }
 
             it++;
-            // Show Dirt Patch (5 Bytes)
+            // Feature 2: Show Dirt (14-byte Absolute Jump Hook)
             if (it->enabled != p2 && addrDirt) {
                 if (it->enabled) {
-                    uint8_t jmp[5] = { 0xE9, 0, 0, 0, 0 };
-                    int32_t off = (int32_t)(caveDirt - (addrDirt + 5));
-                    memcpy(&jmp[1], &off, 4);
-                    MemWrite(m_hProc, addrDirt, jmp, 5);
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveDirt, 8);
+                    MemWrite(m_hProc, addrDirt, hook, 14);
                 } else {
-                    MemWrite(m_hProc, addrDirt, origDirt, 5);
+                    MemWrite(m_hProc, addrDirt, origDirt, 14);
                 }
                 p2 = it->enabled;
             }
@@ -182,7 +177,7 @@ public:
     void SetKeybind(const char* id, int vk) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.vk_code = vk; }
     int GetKeybind(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.vk_code.load(); return 0; }
     const char* GetName() { return "PowerWash Simulator Trainer"; }
-    const char* GetVersion() { return "1.8.0"; }
+    const char* GetVersion() { return "1.0.0"; }
 };
 
 extern "C" {
@@ -199,5 +194,5 @@ extern "C" {
     __declspec(dllexport) void trainer_activate_feature(void* h, const char* id) { static_cast<PowerWashTrainer*>(h)->ActivateFeature(id); }
     __declspec(dllexport) void trainer_set_keybind(void* h, const char* id, int vk) { static_cast<PowerWashTrainer*>(h)->SetKeybind(id, vk); }
     __declspec(dllexport) int trainer_get_keybind(void* h, const char* id) { return static_cast<PowerWashTrainer*>(h)->GetKeybind(id); }
-    __declspec(dllexport) const char* trainer_get_last_error() { return g_lastError; }
+    __declspec(dllexport) const char* trainer_get_last_error() { return "No errors reported."; }
 }
