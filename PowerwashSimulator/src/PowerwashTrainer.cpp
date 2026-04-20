@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 
+// --- Structs ---
 struct TrainerFeatureInfo {
     const char* id;
     const char* name;
@@ -89,17 +90,15 @@ public:
 
     bool Initialize() {
         DWORD pid = FindPid(L"PowerWashSimulator.exe");
-        if (!pid) return false;
+        if (!pid) { SetLastErr("Process not found"); return false; }
         m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         uintptr_t gaBase = GetModuleBase(pid, L"GameAssembly.dll");
-        if (!gaBase) return false;
+        if (!gaBase) { SetLastErr("GameAssembly.dll not found"); return false; }
 
-        // Instant Clean - Steam Offset
         m_siteClean.addr = gaBase + 0xDF4790;
         m_siteClean.len = 10;
         ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 10, nullptr);
 
-        // Show Dirt - AOB
         uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10 };
         m_siteDirt.addr = AobScan(m_hProc, gaBase, 0x2000000, pat, 8);
         if (m_siteDirt.addr) {
@@ -138,15 +137,30 @@ public:
     }
 };
 
-// --- Exports ---
+// --- Strict C Exports (Prevents GetProcAddress failure) ---
 extern "C" {
     __declspec(dllexport) void* trainer_create() { return new PWSTrainer(); }
-    __declspec(dllexport) void trainer_destroy(void* h) { auto t=(PWSTrainer*)h; t->m_running=false; if(t->m_thread.joinable()) t->m_thread.join(); delete t; }
-    __declspec(dllexport) int trainer_initialize(void* h) { return ((PWSTrainer*)h)->Initialize() ? 1 : 0; }
+    __declspec(dllexport) void  trainer_destroy(void* h) { 
+        auto t = (PWSTrainer*)h; 
+        if(!t) return;
+        t->m_running = false; 
+        if(t->m_thread.joinable()) t->m_thread.join(); 
+        delete t; 
+    }
+    __declspec(dllexport) int   trainer_initialize(void* h) { return ((PWSTrainer*)h)->Initialize() ? 1 : 0; }
     __declspec(dllexport) const char* trainer_get_name(void* h) { return "PWS Steam Alpha"; }
-    __declspec(dllexport) int trainer_get_feature_count(void* h) { return 2; }
-    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx) { auto t=(PWSTrainer*)h; auto it=t->m_features.begin(); std::advance(it, idx); return &it->info; }
-    __declspec(dllexport) int trainer_get_feature_enabled(void* h, const char* id) { for(auto& f:((PWSTrainer*)h)->m_features) if(strcmp(f.info.id, id)==0) return f.enabled; return 0; }
-    __declspec(dllexport) void trainer_set_feature_enabled(void* h, const char* id, int en) { for(auto& f:((PWSTrainer*)h)->m_features) if(strcmp(f.info.id, id)==0) f.enabled=(en!=0); }
+    __declspec(dllexport) int   trainer_get_feature_count(void* h) { return 2; }
+    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx) { 
+        auto it = ((PWSTrainer*)h)->m_features.begin(); 
+        std::advance(it, idx); 
+        return &it->info; 
+    }
+    __declspec(dllexport) int   trainer_get_feature_enabled(void* h, const char* id) { 
+        for(auto& f:((PWSTrainer*)h)->m_features) if(strcmp(f.info.id, id)==0) return f.enabled; 
+        return 0; 
+    }
+    __declspec(dllexport) void  trainer_set_feature_enabled(void* h, const char* id, int en) { 
+        for(auto& f:((PWSTrainer*)h)->m_features) if(strcmp(f.info.id, id)==0) f.enabled=(en!=0); 
+    }
     __declspec(dllexport) const char* trainer_get_last_error() { return g_lastError; }
 }
