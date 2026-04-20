@@ -353,7 +353,7 @@
           "release_tag": "WeLoveKatamariREROLL-1.0.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "164a435fb74f7dd37fece2fe7fb1c568073fa487538494a902b5fde8af20f798",
+          "sha256": "aca292754c7e3733c7a30b92cb1d90efae4042ddc9557a366271e29b25a99c26",
           "version_constraint": {
             "type": "exact",
             "builds": [
