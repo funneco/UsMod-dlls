@@ -401,6 +401,13 @@
               "description": "Sets effectiveness to 10,000",
               "is_toggle": true,
               "default_vk": 112
+            },
+            {
+              "id": "show_dirt",
+              "name": "Permanent Show Dirt",
+              "description": "Keeps dirt highlighted constantly",
+              "is_toggle": true,
+              "default_vk": 112
             }
           ]
         }
