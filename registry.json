@@ -10,7 +10,7 @@
           "release_tag": "Balatro-1.0.1f-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "165687341bd80461083194f8d43689bbfdc4a4ca611156232fa7757d5ca54356",
+          "sha256": "a82aba20fcb6550742555487fc109eda8197bfd6eca107cc3d4ec5809d26ca77",
           "version_constraint": {
             "type": "exact",
             "builds": [
@@ -29,7 +29,7 @@
           "release_tag": "StardewValley-1.6.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "6a63115e1c4e24a90504ff2a0cbf788d5e907132c12dc82e5de1d113da5e511d",
+          "sha256": "839ba0d3531d9f9f1f6b63059f54a0115c849497ab1df5ff02d5cf25d86bb9f9",
           "version_constraint": {
             "type": "exact",
             "builds": [
@@ -67,7 +67,7 @@
           "release_tag": "WeLoveKatamariREROLL-1.0.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "",
+          "sha256": "08e2d744580fc9803af2daa43071cadb51d813fa32310b96a19315b376e3e3d4",
           "version_constraint": {
             "type": "exact",
             "builds": [
@@ -86,7 +86,7 @@
           "release_tag": "Cyberpunk2077-2.12-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "04794b6beb1181067fd469bf2b1335d2bdfcbf3a9b4abb4432eb7bd53bf907cd",
+          "sha256": "6795cf12d3d5a34d8dfa82509c02bfffc37d5ff3ac4064709e8da04618193f87",
           "version_constraint": {
             "type": "range",
             "min_build": "14000000",
