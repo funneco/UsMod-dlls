@@ -40,6 +40,25 @@
       ]
     },
     {
+      "game_id": "265930",
+      "game_name": "GoatSimulator",
+      "entries": [
+        {
+          "trainer_version": "1.0.0",
+          "release_tag": "GoatSimulator-1.4.x-1.0.0",
+          "repo": "funneco/UsMod-dlls",
+          "dll_filename": "trainer.dll",
+          "sha256": "",
+          "version_constraint": {
+            "type": "exact",
+            "builds": [
+              "1629888"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "game_id": "1091500",
       "game_name": "Cyberpunk2077",
       "entries": [
