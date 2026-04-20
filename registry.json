@@ -48,7 +48,7 @@
           "release_tag": "GoatSimulator-1.4.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "79259096d05ed33c9ffbf351f46f8ff5ca7e6ba819d0cf837175e8a3e7d67712",
+          "sha256": "849a3486c4315517b681e271404e738260c40fd61d500069f248dc6b20f85e06",
           "version_constraint": {
             "type": "exact",
             "builds": [
