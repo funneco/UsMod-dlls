@@ -64,11 +64,17 @@ static bool MemWriteRaw(HANDLE hProc, uintptr_t addr, const void* data, size_t s
 
 // Scan entire module buffer for all occurrences of pat.
 static std::vector<uintptr_t> AobAll(HANDLE hProc, uintptr_t base, size_t sz,
-                                     const uint8_t* pat, size_t len) {
+                                     const uint8_t* pat, size_t len,
+                                     bool* readOk = nullptr) {
     std::vector<uint8_t> buf(sz);
-    SIZE_T r;
+    SIZE_T r = 0;
     std::vector<uintptr_t> hits;
-    if (!ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r)) return hits;
+
+    bool ok = ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r) && r > 0;
+    if (readOk) *readOk = ok;           // always write result before returning
+    if (!ok && r == 0) return hits;     // total failure — nothing was read
+
+    // r bytes were read (may be less than sz if partial); scan what we got
     for (size_t i = 0; i + len <= r; ++i)
         if (memcmp(buf.data() + i, pat, len) == 0)
             hits.push_back(base + i);
@@ -249,7 +255,8 @@ private:
         0x89,0x4A,0x3C, 0x48,0x83,0xC4,0x28, 0xC3, 0xE8
     };
     bool readOk = false;
-    auto cdHits = AobAll(m_hProc, gaBase, gaSize, PAT_CD, sizeof(PAT_CD), &readOk);
+auto cdHits = AobAll(m_hProc, gaBase, gaSize,
+                     PAT_CD, sizeof(PAT_CD), &readOk);
     if (!readOk) {
         SetLastErr("ReadProcessMemory failed on GameAssembly.dll — "
                    "run as administrator or wait for the game to finish loading");
