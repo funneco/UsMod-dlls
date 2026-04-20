@@ -5,7 +5,6 @@
 #include "ITrainerModule.h"
 #include <windows.h>
 #include <tlhelp32.h>
-#include <psapi.h>
 #include <vector>
 #include <list>
 #include <thread>
@@ -30,17 +29,17 @@ static DWORD FindPid(const wchar_t* exe) {
     return pid;
 }
 
-static uintptr_t GetModuleBase(HANDLE hProc, const wchar_t* mod) {
-    HMODULE mods[1024]; DWORD needed;
-    if (!EnumProcessModulesEx(hProc, mods, sizeof(mods), &needed, LIST_MODULES_32BIT))
-        return 0;
-    wchar_t name[MAX_PATH];
-    for (DWORD i = 0; i < needed / sizeof(HMODULE); ++i) {
-        GetModuleBaseNameW(hProc, mods[i], name, MAX_PATH);
-        if (_wcsicmp(name, mod) == 0)
-            return reinterpret_cast<uintptr_t>(mods[i]);
-    }
-    return 0;
+// TH32CS_SNAPMODULE32 is required to see 32-bit modules from a 64-bit process.
+static uintptr_t GetModuleBase(DWORD pid, const wchar_t* mod) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    MODULEENTRY32W me{ sizeof(me) };
+    uintptr_t base = 0;
+    if (Module32FirstW(snap, &me))
+        do { if (_wcsicmp(me.szModule, mod) == 0) { base = reinterpret_cast<uintptr_t>(me.modBaseAddr); break; } }
+        while (Module32NextW(snap, &me));
+    CloseHandle(snap);
+    return base;
 }
 
 template<typename T>
@@ -147,13 +146,18 @@ public:
             SetLastErr(buf);
             return false;
         }
-        m_moduleBase = GetModuleBase(m_hProc, L"GoatGame-Win32-Shipping.exe");
+        m_moduleBase = GetModuleBase(pid, L"GoatGame-Win32-Shipping.exe");
         if (!m_moduleBase) {
-            SetLastErr("module base not found");
+            SetLastErr("module base not found — game may still be loading, retry");
             CloseHandle(m_hProc); m_hProc = nullptr;
             return false;
         }
         ResolveAddresses();
+        if (!m_addrY) {
+            SetLastErr("pointer resolution failed — wrong build or game is still loading");
+            CloseHandle(m_hProc); m_hProc = nullptr;
+            return false;
+        }
         m_running = true;
         m_thread  = std::thread(&GoatSimulatorTrainer::Loop, this);
         return true;
