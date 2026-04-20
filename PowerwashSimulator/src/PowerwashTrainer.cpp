@@ -61,7 +61,7 @@ static uintptr_t AobScan(HANDLE hProc, uintptr_t base, size_t sz, const uint8_t*
 
 struct PatchSite {
     uintptr_t addr = 0;
-    uint8_t orig[5] = { 0 }; // We only need 5 bytes for this specific jump
+    uint8_t orig[5] = { 0 }; // Matches the 5 bytes your script restores
     uintptr_t cave = 0;
 };
 
@@ -100,12 +100,11 @@ public:
 
         // Patch 1: Instant Clean (Static Offset)
         m_siteClean.addr = gaBase + 0xDF4790;
-        m_siteClean.len = 10;
-        ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 10, nullptr);
+        ReadProcessMemory(m_hProc, (LPCVOID)m_siteClean.addr, m_siteClean.orig, 5, nullptr);
 
         // Patch 2: Show Dirt (AOB Scan)
-        uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x00, 0x28 }; // ?? becomes 0x00 for the scan mask
-m_siteDirt.addr = AobScan(m_hProc, gaBase, 0x3000000, pat, 10); 
+        uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x43, 0x38, 0xF3, 0x0F, 0x10, 0x00, 0x28 };
+        m_siteDirt.addr = AobScan(m_hProc, gaBase, 0x3000000, pat, 10);
 
 if (m_siteDirt.addr) {
     // READ ONLY 5 BYTES - This matches the 'db F3 0F 11 43 38' in your [DISABLE]
