@@ -1,16 +1,3 @@
-// Stardew Valley Trainer — Steam App 413150, build 16826371 (v1.6.x)
-// Strategy: hook Game1::Update to get farmer ptr each frame via get_player call;
-//           patch .NET JIT stubs for fishing and movement.
-//
-// Patterns sourced from Stardew Valley_x64.CT by sub1to.
-//
-// ── Field offsets ────────────────────────────────────────────────────────────
-// These are for .NET 6 x64 managed heap layout (build 16826371).
-// To verify in CE: enable table → right-click stat entry →
-//   "Find out what accesses this address" → subtract farmer_base_ptr.
-// ─────────────────────────────────────────────────────────────────────────────
-
-#include "ITrainerModule.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <vector>
@@ -20,621 +7,992 @@
 #include <cstdint>
 #include <cstring>
 
-static char g_lastError[256] = "";
-static void SetLastErr(const char* msg) { strncpy(g_lastError, msg, sizeof(g_lastError) - 1); }
+struct TrainerFeatureInfo {
+    const char* id;
+    const char* name;
+    const char* description;
+    int is_toggle;
+    int hotkey;
+};
 
-// ── .NET Farmer field offsets ─────────────────────────────────────────────────
-static constexpr ptrdiff_t OFF_HEALTH           = 0x178;
-static constexpr ptrdiff_t OFF_MAX_HEALTH       = 0x17C;
-static constexpr ptrdiff_t OFF_NET_STAMINA_PTR  = 0x198;
-static constexpr ptrdiff_t OFF_NETFLOAT_VALUE   = 0x10;
-static constexpr ptrdiff_t OFF_MAX_STAMINA_PTR  = 0x1A0;
-static constexpr ptrdiff_t OFF_NETINT_VALUE     = 0x10;
-static constexpr ptrdiff_t OFF_NET_SPEED_PTR    = 0x1B0;
-static constexpr ptrdiff_t OFF_TEAM_ROOT_PTR    = 0x148;
-static constexpr ptrdiff_t OFF_NETREF_VALUE     = 0x18;
-static constexpr ptrdiff_t OFF_TEAM_MONEY_PTR   = 0x150;
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
+// --- Utilities ---
 static DWORD FindPid(const wchar_t* exe) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return 0;
     PROCESSENTRY32W pe{ sizeof(pe) };
     DWORD pid = 0;
     if (Process32FirstW(snap, &pe))
-        do { if (_wcsicmp(pe.szExeFile, exe) == 0) { pid = pe.th32ProcessID; break; } }
-        while (Process32NextW(snap, &pe));
+        do { if (_wcsicmp(pe.szExeFile, exe) == 0) { pid = pe.th32ProcessID; break; } } while (Process32NextW(snap, &pe));
     CloseHandle(snap);
     return pid;
 }
 
-static uintptr_t GetMainModuleBase(DWORD pid, const wchar_t* mod) {
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
+static uintptr_t GetModuleBase(DWORD pid, const wchar_t* modName) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (snap == INVALID_HANDLE_VALUE) return 0;
     MODULEENTRY32W me{ sizeof(me) };
     uintptr_t base = 0;
     if (Module32FirstW(snap, &me))
-        do { if (_wcsicmp(me.szModule, mod) == 0) { base = reinterpret_cast<uintptr_t>(me.modBaseAddr); break; } }
-        while (Module32NextW(snap, &me));
+        do { if (_wcsicmp(me.szModule, modName) == 0) { base = (uintptr_t)me.modBaseAddr; break; } } while (Module32NextW(snap, &me));
     CloseHandle(snap);
     return base;
 }
 
-static size_t GetModuleSize(HANDLE hProc, uintptr_t base) {
-    IMAGE_DOS_HEADER dos; SIZE_T r;
-    if (!ReadProcessMemory(hProc, reinterpret_cast<LPCVOID>(base), &dos, sizeof(dos), &r)) return 0;
-    IMAGE_NT_HEADERS64 nt;
-    if (!ReadProcessMemory(hProc, reinterpret_cast<LPCVOID>(base + dos.e_lfanew), &nt, sizeof(nt), &r)) return 0;
-    return nt.OptionalHeader.SizeOfImage;
-}
-
-// Scan all committed executable regions in [rangeStart, rangeEnd).
-// Pass rangeEnd=0 to scan entire process address space.
-static uintptr_t AobFirst(HANDLE hProc,
-                           uintptr_t rangeStart, uintptr_t rangeEnd,
-                           const uint8_t* pat, const uint8_t* mask, size_t len) {
-    constexpr size_t CHUNK = 0x100000;
-    std::vector<uint8_t> buf(CHUNK);
-
-    SYSTEM_INFO si; GetSystemInfo(&si);
-    if (rangeEnd == 0) rangeEnd = (uintptr_t)si.lpMaximumApplicationAddress;
-
-    uintptr_t addr = rangeStart;
-    while (addr < rangeEnd) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) { addr += 0x1000; continue; }
-
-        uintptr_t regionEnd = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
-        bool exec = (mbi.State  == MEM_COMMIT) &&
-                    (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
-                                    PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
-        if (exec) {
-            uintptr_t scanStart = (uintptr_t)mbi.BaseAddress;
-            uintptr_t scanEnd   = std::min(regionEnd, rangeEnd);
-            for (uintptr_t off = scanStart; off < scanEnd; ) {
-                size_t readSize = std::min((size_t)(scanEnd - off), CHUNK);
-                SIZE_T r;
-                if (!ReadProcessMemory(hProc, (LPCVOID)off, buf.data(), readSize, &r)) { off += readSize; continue; }
-                for (size_t i = 0; i + len <= r; ++i) {
-                    bool ok = true;
-                    for (size_t j = 0; j < len; ++j)
-                        if (mask[j] != 0xCC && buf[i + j] != pat[j]) { ok = false; break; }
-                    if (ok) return off + i;
-                }
-                off += r;
-            }
-        }
-        addr = regionEnd;
-    }
-    return 0;
-}
-
-static uintptr_t AllocNear(HANDLE hProc, uintptr_t hint, size_t size) {
-    SYSTEM_INFO si; GetSystemInfo(&si);
-    const uintptr_t gran = si.dwAllocationGranularity;
-    const uintptr_t lo = (hint > 0x7FF00000ULL) ? hint - 0x7FF00000ULL : (uintptr_t)si.lpMinimumApplicationAddress;
-    const uintptr_t hi = hint + 0x7FF00000ULL;
-
-    for (uintptr_t addr = (hint & ~(gran - 1)); addr > lo; addr -= gran) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) continue;
-        if (mbi.State == MEM_FREE) {
-            void* p = VirtualAllocEx(hProc, (LPVOID)addr, size,
-                                     MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-            if (p) return (uintptr_t)p;
-        }
-    }
-    for (uintptr_t addr = (hint + gran) & ~(gran - 1); addr < hi; addr += gran) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) continue;
-        if (mbi.State == MEM_FREE) {
-            void* p = VirtualAllocEx(hProc, (LPVOID)addr, size,
-                                     MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-            if (p) return (uintptr_t)p;
-        }
-    }
-    return 0;
-}
-
-static void RemoteWrite(HANDLE hProc, uintptr_t addr, const void* data, size_t size) {
+static bool MemWrite(HANDLE hProc, uintptr_t addr, const void* data, size_t size) {
     DWORD old;
-    VirtualProtectEx(hProc, (LPVOID)addr, size, PAGE_EXECUTE_READWRITE, &old);
-    WriteProcessMemory(hProc, (LPVOID)addr, data, size, nullptr);
+    if (!VirtualProtectEx(hProc, (LPVOID)addr, size, PAGE_EXECUTE_READWRITE, &old)) return false;
+    SIZE_T r;
+    bool ok = WriteProcessMemory(hProc, (LPVOID)addr, data, size, &r);
     VirtualProtectEx(hProc, (LPVOID)addr, size, old, &old);
+    return ok;
 }
 
-static void WriteRel32Jmp(HANDLE hProc, uintptr_t from, uintptr_t to, size_t patchLen = 5) {
-    std::vector<uint8_t> patch(patchLen, 0x90);
-    patch[0] = 0xE9;
-    int32_t rel = (int32_t)(to - from - 5);
-    memcpy(&patch[1], &rel, 4);
-    RemoteWrite(hProc, from, patch.data(), patchLen);
+static uintptr_t AobScan(HANDLE hProc, uintptr_t base, size_t sz, const uint8_t* pat, const uint8_t* mask, size_t len) {
+    std::vector<uint8_t> buf(sz);
+    SIZE_T r = 0;
+    if (!ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r)) return 0;
+    for (size_t i = 0; i + len <= r; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < len; j++) {
+            if (mask[j] == 0xFF && buf[i + j] != pat[j]) { match = false; break; }
+        }
+        if (match) return base + i;
+    }
+    return 0;
 }
-
-template<typename T>
-static bool RemoteRead(HANDLE hProc, uintptr_t addr, T& out) {
-    SIZE_T r;
-    return ReadProcessMemory(hProc, (LPCVOID)addr, &out, sizeof(T), &r) && r == sizeof(T);
-}
-
-template<typename T>
-static bool RemoteWrite(HANDLE hProc, uintptr_t addr, const T& val) {
-    SIZE_T r;
-    DWORD old;
-    VirtualProtectEx(hProc, (LPVOID)addr, sizeof(T), PAGE_EXECUTE_READWRITE, &old);
-    bool ok = WriteProcessMemory(hProc, (LPVOID)addr, &val, sizeof(T), &r);
-    VirtualProtectEx(hProc, (LPVOID)addr, sizeof(T), old, &old);
-    return ok && r == sizeof(T);
-}
-
-// ── Hook state ────────────────────────────────────────────────────────────────
-
-struct HookSite {
-    uintptr_t origAddr  = 0;
-    uintptr_t caveAddr  = 0;
-    uint8_t   origBytes[16] = {};
-    size_t    origLen   = 0;
-    bool      installed = false;
-};
-
-// ── Feature ───────────────────────────────────────────────────────────────────
 
 struct Feature {
     TrainerFeatureInfo info;
-    std::atomic<bool>  enabled{false};
-    std::atomic<int>   vk_code{0};
-    Feature(const char* id_, const char* n, const char* d, int tog, int vk)
-        : info{id_, n, d, tog, vk}, vk_code(vk) {}
+    std::atomic<bool> enabled{ false };
+    std::atomic<int> vk_code{ 0 };
+    Feature(const char* i, const char* n, const char* d, int tog, int vk)
+        : info{ i,n,d,tog,vk }, vk_code(vk) {}
 };
 
-// ── Trainer class ─────────────────────────────────────────────────────────────
-
-class StardewTrainer {
+class FarmingGameTrainer {
 public:
-    StardewTrainer()
-        : m_running(false), m_hProc(nullptr), m_farmerPtr(0) {
-        m_features.emplace_back("lock_health",   "Lock Health",       "Keep health at maximum",         1, VK_F1);
-        m_features.emplace_back("lock_stamina",  "Lock Stamina",      "Keep stamina at maximum",        1, VK_F2);
-        m_features.emplace_back("add_money",     "Add $10,000",       "Add $10,000 to wallet",          0, VK_F3);
-        m_features.emplace_back("instant_bite",  "Instant Bite",      "Fish bite immediately",          1, VK_F4);
-        m_features.emplace_back("instant_catch", "Instant Catch",     "Fishing bar always full",        1, VK_F5);
-        m_features.emplace_back("max_quality",   "Max Fish Quality",  "Iridium quality + treasure",     1, VK_F6);
-        m_features.emplace_back("speed_hack",    "Speed Hack",        "Add +10 movement speed bonus",   1, VK_F7);
+    HANDLE m_hProc = nullptr;
+    std::atomic<bool> m_running{ false };
+    std::thread m_thread;
+    std::list<Feature> m_features;
 
-        // Cache stable pointers into list nodes
-        auto it = m_features.begin();
-        m_fLockHealth   = &(*it++);
-        m_fLockStamina  = &(*it++);
-        m_fAddMoney     = &(*it++);
-        m_fInstantBite  = &(*it++);
-        m_fInstantCatch = &(*it++);
-        m_fMaxQuality   = &(*it++);
-        m_fSpeedHack    = &(*it++);
+    // AOB addresses and caves
+    uintptr_t addrNoclip = 0;
+    uint8_t origNoclip[7] = { 0 };
+    uintptr_t caveNoclip = 0;
+
+    uintptr_t addrStamina = 0;
+    uint8_t origStamina[10] = { 0 };
+    uintptr_t caveStamina = 0;
+    uintptr_t staminaPtr = 0;
+    std::atomic<bool> enableStamina{ false };
+
+    uintptr_t addrHealth = 0;
+    uint8_t origHealth[8] = { 0 };
+    uintptr_t caveHealth = 0;
+
+    uintptr_t addrSpeed = 0;
+    uint8_t origSpeed[6] = { 0 };
+    uintptr_t caveSpeed = 0;
+
+    uintptr_t addrItems = 0;
+    uint8_t origItems[6] = { 0 };
+    uintptr_t caveItems = 0;
+
+    uintptr_t addrWater = 0;
+    uint8_t origWater[7] = { 0 };
+    uintptr_t caveWater = 0;
+
+    uintptr_t addrFreezeTime = 0;
+    uint8_t origFreezeTime[1] = { 0 };
+
+    uintptr_t addrFishBite = 0;
+    uint8_t origFishBite[10] = { 0 };
+    uintptr_t caveFishBite = 0;
+
+    uintptr_t addrFishCatch = 0;
+    uint8_t origFishCatch[8] = { 0 };
+    uintptr_t caveFishCatch = 0;
+
+    uintptr_t addrTrees = 0;
+    uint8_t origTrees[5] = { 0 };
+    uintptr_t caveTrees = 0;
+
+    uintptr_t addrCrafting = 0;
+    uint8_t origCrafting[6] = { 0 };
+    uintptr_t caveCrafting = 0;
+
+    uintptr_t addrCropGrowth = 0;
+    uint8_t origCropGrowth[7] = { 0 };
+    uintptr_t caveCropGrowth = 0;
+
+    uintptr_t addrFriendship = 0;
+    uint8_t origFriendship[5] = { 0 };
+    uintptr_t caveFriendship = 0;
+
+    uintptr_t addrPetFriendship = 0;
+    uint8_t origPetFriendship[5] = { 0 };
+    uintptr_t cavePetFriendship = 0;
+
+    uintptr_t addrGold = 0;
+    uint8_t origGold[7] = { 0 };
+    uintptr_t caveGold = 0;
+    std::atomic<int> goldValue{ 0 };
+
+    uintptr_t addrStackables = 0;
+    uint8_t origStackables[5] = { 0 };
+    uintptr_t caveStackables = 0;
+
+    uintptr_t addrAnimalStats = 0;
+    uint8_t origAnimalStats[5] = { 0 };
+    uintptr_t caveAnimalStats = 0;
+    std::atomic<bool> enableFullness{ false };
+    std::atomic<bool> enableHappiness{ false };
+    std::atomic<bool> enableFriendliness{ false };
+
+    FarmingGameTrainer() {
+        m_features.emplace_back("noclip", "No Clip", "Walk through walls", 1, VK_F1);
+        m_features.emplace_back("unlimited_stamina", "Unlimited Stamina", "Infinite stamina", 1, VK_F2);
+        m_features.emplace_back("unlimited_health", "Unlimited Health", "Infinite health", 1, VK_F3);
+        m_features.emplace_back("super_speed", "Super Speed (10x)", "Move 10x faster", 1, VK_F4);
+        m_features.emplace_back("unlimited_items", "Unlimited Items", "Items don't decrease", 1, VK_F5);
+        m_features.emplace_back("unlimited_water", "Unlimited Water", "Watering can never empties", 1, VK_F6);
+        m_features.emplace_back("freeze_time", "Freeze Game Time", "Time stops", 1, VK_F7);
+        m_features.emplace_back("instant_fish_bite", "Instant Fish Bite", "Fish bite immediately", 1, VK_F8);
+        m_features.emplace_back("easy_fish_catch", "Easy Fish Catch", "Instant catch", 1, VK_F9);
+        m_features.emplace_back("one_hit_trees", "One Hit Trees", "Trees fall in one hit", 1, VK_F10);
+        m_features.emplace_back("free_crafting", "Free Crafting", "Craft without resources", 1, VK_F11);
+        m_features.emplace_back("instant_crop_growth", "Instant Crop Growth", "Crops grow instantly", 1, VK_F12);
+        m_features.emplace_back("max_friendship", "Max Friendship", "Max friendship when talking", 1, VK_NUMPAD1);
+        m_features.emplace_back("max_pet_friendship", "Max Pet Friendship", "Max pet friendship", 1, VK_NUMPAD2);
+        m_features.emplace_back("stackables_999", "Stackables to 999", "Stack items to 999", 1, VK_NUMPAD3);
+        m_features.emplace_back("max_animal_fullness", "Max Animal Fullness", "Animals always full", 1, VK_NUMPAD4);
+        m_features.emplace_back("max_animal_happiness", "Max Animal Happiness", "Animals always happy", 1, VK_NUMPAD5);
+        m_features.emplace_back("max_animal_friendliness", "Max Animal Friendliness", "Animals max friendly", 1, VK_NUMPAD6);
     }
 
-    ~StardewTrainer() { Shutdown(); }
-
     bool Initialize() {
-        DWORD pid = FindPid(L"Stardew Valley.exe");
-        if (!pid) {
-            SetLastErr("process not found — is Stardew Valley running?");
-            return false;
-        }
+        DWORD pid = FindPid(L"Stardew Valley.exe"); // Adjust exe name as needed
+        if (!pid) return false;
+        m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+        if (!m_hProc) return false;
 
-        m_hProc = OpenProcess(
-            PROCESS_VM_READ | PROCESS_VM_WRITE |
-            PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION,
-            FALSE, pid);
-        if (!m_hProc) {
-            char buf[128];
-            wsprintfA(buf, "OpenProcess failed (error %lu) — try running as administrator", GetLastError());
-            SetLastErr(buf);
-            return false;
-        }
+        uintptr_t baseAddr = GetModuleBase(pid, L"Stardew Valley.exe"); // Adjust as needed
+        if (!baseAddr) return false;
 
-        if (!InstallHooks()) {
-            Cleanup(); return false;
-        }
+        // Initialize all AOB scans and caves
+        InitNoclip(baseAddr);
+        InitStamina(baseAddr);
+        InitHealth(baseAddr);
+        InitSpeed(baseAddr);
+        InitItems(baseAddr);
+        InitWater(baseAddr);
+        InitFreezeTime(baseAddr);
+        InitFishBite(baseAddr);
+        InitFishCatch(baseAddr);
+        InitTrees(baseAddr);
+        InitCrafting(baseAddr);
+        InitCropGrowth(baseAddr);
+        InitFriendship(baseAddr);
+        InitPetFriendship(baseAddr);
+        InitGold(baseAddr);
+        InitStackables(baseAddr);
+        InitAnimalStats(baseAddr);
 
         m_running = true;
-        m_thread  = std::thread(&StardewTrainer::Loop, this);
+        m_thread = std::thread(&FarmingGameTrainer::Loop, this);
         return true;
+    }
+
+    void InitNoclip(uintptr_t base) {
+        uint8_t pat[] = { 0x0F, 0xB6, 0x8E, 0x4E, 0x07, 0x00, 0x00 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrNoclip = AobScan(m_hProc, base, 0x10000000, pat, mask, 7);
+        if (addrNoclip) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrNoclip, origNoclip, 7, nullptr);
+            caveNoclip = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            // mov ecx, 1; jmp return
+            uint8_t code[] = {
+                0xB9, 0x01, 0x00, 0x00, 0x00,                   // mov ecx, 1
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            uintptr_t retAddr = addrNoclip + 7;
+            memcpy(&code[11], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveNoclip, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitStamina(uintptr_t base) {
+        uint8_t pat[] = { 0x48, 0x8B, 0x09, 0x48, 0x8B, 0x89, 0xD0, 0x04, 0x00, 0x00, 0xC5, 0x7A, 0x10, 0x49, 0x4C };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrStamina = AobScan(m_hProc, base, 0x10000000, pat, mask, 15);
+        if (addrStamina) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrStamina, origStamina, 10, nullptr);
+            caveStamina = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 2048, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            staminaPtr = caveStamina + 1024;
+            
+            // Complex stamina logic from CE table
+            uint8_t code[] = {
+                0x48, 0x8B, 0x09,                               // mov rcx,[rcx]
+                0x48, 0x89, 0x0D, 0x00, 0x00, 0x00, 0x00,       // mov [staminaPtr],rcx
+                0x48, 0x8B, 0x89, 0xD0, 0x04, 0x00, 0x00,       // mov rcx,[rcx+04D0]
+                0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00,       // mov rax,[staminaPtr]
+                0x83, 0x78, 0x08, 0x00,                         // cmp dword ptr [rax+8],0
+                0x74, 0x0D,                                     // je skip
+                0xD9, 0x41, 0x54,                               // fld dword ptr [rcx+54]
+                0xD9, 0x59, 0x4C,                               // fstp dword ptr [rcx+4C]
+                // skip:
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            int32_t ptrOff = (int32_t)(staminaPtr - (caveStamina + 10));
+            memcpy(&code[6], &ptrOff, 4);
+            
+            int32_t ptrOff2 = (int32_t)(staminaPtr - (caveStamina + 24));
+            memcpy(&code[20], &ptrOff2, 4);
+            
+            uintptr_t retAddr = addrStamina + 10;
+            memcpy(&code[39], &retAddr, 8);
+            
+            WriteProcessMemory(m_hProc, (LPVOID)caveStamina, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitHealth(uintptr_t base) {
+        uint8_t pat[] = { 0xC5, 0xFA, 0x2A, 0x81, 0xEC, 0x06, 0x00, 0x00, 0xC5, 0xF0, 0x57, 0xC9, 0xC5, 0xF2, 0x2A, 0xCA };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrHealth = AobScan(m_hProc, base, 0x10000000, pat, mask, 16);
+        if (addrHealth) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrHealth, origHealth, 8, nullptr);
+            caveHealth = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            // Set health to max health
+            uint8_t code[] = {
+                0xDB, 0x81, 0xF0, 0x06, 0x00, 0x00,             // fild dword ptr [rcx+6F0]
+                0xDB, 0x99, 0xEC, 0x06, 0x00, 0x00,             // fistp dword ptr [rcx+6EC]
+                0xC5, 0xFA, 0x2A, 0x81, 0xEC, 0x06, 0x00, 0x00, // original instruction
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrHealth + 8;
+            memcpy(&code[26], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveHealth, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitSpeed(uintptr_t base) {
+        uint8_t pat[] = { 0x57, 0x56, 0x48, 0x83, 0xEC, 0x68, 0xC5, 0xF8, 0x77, 0xC5, 0xF8, 0x29, 0x74, 0x24, 0x50 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrSpeed = AobScan(m_hProc, base, 0x10000000, pat, mask, 15);
+        if (addrSpeed) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrSpeed, origSpeed, 6, nullptr);
+            caveSpeed = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            float speed = 10.0f;
+            uintptr_t speedData = caveSpeed + 512;
+            
+            uint8_t code[] = {
+                0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0,[speedData]
+                0xC3                                            // ret
+            };
+            
+            int32_t off = (int32_t)(speedData - (caveSpeed + 8));
+            memcpy(&code[4], &off, 4);
+            
+            WriteProcessMemory(m_hProc, (LPVOID)caveSpeed, code, sizeof(code), nullptr);
+            WriteProcessMemory(m_hProc, (LPVOID)speedData, &speed, 4, nullptr);
+        }
+    }
+
+    void InitItems(uintptr_t base) {
+        uint8_t pat[] = { 0x8D, 0x68, 0xFF, 0x48, 0x8B, 0xCF, 0x8B, 0xD5, 0xFF, 0x53, 0x10 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrItems = AobScan(m_hProc, base, 0x10000000, pat, mask, 11);
+        if (addrItems) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrItems, origItems, 6, nullptr);
+            caveItems = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            // lea ebp,[rax] instead of lea ebp,[rax-1]
+            uint8_t code[] = {
+                0x8D, 0x28,                                     // lea ebp,[rax]
+                0x48, 0x8B, 0xCF,                               // mov rcx,rdi
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrItems + 6;
+            memcpy(&code[11], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveItems, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitWater(uintptr_t base) {
+        uint8_t pat[] = { 0x4C, 0x8B, 0x86, 0x08, 0x01, 0x00, 0x00, 0x45, 0x8B, 0x40, 0x4C };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrWater = AobScan(m_hProc, base, 0x10000000, pat, mask, 11);
+        if (addrWater) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrWater, origWater, 7, nullptr);
+            caveWater = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0x4C, 0x8B, 0x86, 0x08, 0x01, 0x00, 0x00,       // mov r8,[rsi+108]
+                0x4D, 0x85, 0xC0,                               // test r8,r8
+                0x74, 0x08,                                     // je skip
+                0x41, 0xC7, 0x40, 0x4C, 0x20, 0x00, 0x00, 0x00, // mov [r8+4C],32
+                // skip:
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrWater + 7;
+            memcpy(&code[25], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveWater, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitFreezeTime(uintptr_t base) {
+        uint8_t pat[] = { 0x83, 0x05, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x8B, 0x0D };
+        uint8_t mask[] = { 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF };
+        addrFreezeTime = AobScan(m_hProc, base, 0x10000000, pat, mask, 9);
+        if (addrFreezeTime) {
+            ReadProcessMemory(m_hProc, (LPCVOID)(addrFreezeTime + 6), origFreezeTime, 1, nullptr);
+        }
+    }
+
+    void InitFishBite(uintptr_t base) {
+        uint8_t pat[] = { 0xC5, 0xF8, 0x28, 0xC6, 0xC5, 0xF8, 0x28, 0x74, 0x24, 0x20 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrFishBite = AobScan(m_hProc, base, 0x10000000, pat, mask, 10);
+        if (addrFishBite) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrFishBite, origFishBite, 10, nullptr);
+            caveFishBite = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0x0F, 0x57, 0xF6,                               // xorps xmm6,xmm6
+                0xC5, 0xF8, 0x28, 0xC6,                         // vmovaps xmm0,xmm6
+                0xC5, 0xF8, 0x28, 0x74, 0x24, 0x20,             // vmovaps xmm6,[rsp+20]
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrFishBite + 10;
+            memcpy(&code[19], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveFishBite, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitFishCatch(uintptr_t base) {
+        uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x81, 0xE8, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x10, 0x89 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrFishCatch = AobScan(m_hProc, base, 0x10000000, pat, mask, 12);
+        if (addrFishCatch) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrFishCatch, origFishCatch, 8, nullptr);
+            caveFishCatch = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            float one = 1.0f;
+            uintptr_t oneData = caveFishCatch + 512;
+            
+            uint8_t code[] = {
+                0xF3, 0x0F, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, // movss xmm0,[oneData]
+                0xF3, 0x0F, 0x11, 0x81, 0xE8, 0x00, 0x00, 0x00, // movss [rcx+E8],xmm0
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            int32_t off = (int32_t)(oneData - (caveFishCatch + 8));
+            memcpy(&code[4], &off, 4);
+            
+            uintptr_t retAddr = addrFishCatch + 8;
+            memcpy(&code[22], &retAddr, 8);
+            
+            WriteProcessMemory(m_hProc, (LPVOID)caveFishCatch, code, sizeof(code), nullptr);
+            WriteProcessMemory(m_hProc, (LPVOID)oneData, &one, 4, nullptr);
+        }
+    }
+
+    void InitTrees(uintptr_t base) {
+        uint8_t pat[] = { 0xC5, 0xFA, 0x10, 0x49, 0x4C, 0xC4, 0xC1, 0x72, 0x5C, 0xC8 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrTrees = AobScan(m_hProc, base, 0x10000000, pat, mask, 10);
+        if (addrTrees) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrTrees, origTrees, 5, nullptr);
+            caveTrees = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0x0F, 0x57, 0xC9,                               // xorps xmm1,xmm1
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrTrees + 5;
+            memcpy(&code[7], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveTrees, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitCrafting(uintptr_t base) {
+        uint8_t pat[] = { 0x8B, 0x50, 0x38, 0x2B, 0x50, 0x40, 0x8D, 0x04, 0xD2 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrCrafting = AobScan(m_hProc, base, 0x10000000, pat, mask, 9);
+        if (addrCrafting) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrCrafting, origCrafting, 6, nullptr);
+            caveCrafting = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0xC7, 0x40, 0x38, 0x00, 0x00, 0x00, 0x00,       // mov [rax+38],0
+                0x8B, 0x50, 0x38,                               // mov edx,[rax+38]
+                0x2B, 0x50, 0x40,                               // sub edx,[rax+40]
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrCrafting + 6;
+            memcpy(&code[19], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveCrafting, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitCropGrowth(uintptr_t base) {
+        uint8_t pat[] = { 0x48, 0x8B, 0x4E, 0x28, 0x8B, 0x49, 0x4C, 0x48 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrCropGrowth = AobScan(m_hProc, base, 0x10000000, pat, mask, 8);
+        if (addrCropGrowth) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrCropGrowth, origCropGrowth, 7, nullptr);
+            caveCropGrowth = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0x48, 0x8B, 0x4E, 0x28,                         // mov rcx,[rsi+28]
+                0x48, 0x8B, 0x46, 0x10,                         // mov rax,[rsi+10]
+                0x48, 0x8B, 0x40, 0x38,                         // mov rax,[rax+38]
+                0x8B, 0x40, 0x4C,                               // mov eax,[rax+4C]
+                0xFF, 0xC8,                                     // dec eax
+                0x39, 0x41, 0x4C,                               // cmp [rcx+4C],eax
+                0x7F, 0x03,                                     // jg skip
+                0x89, 0x41, 0x4C,                               // mov [rcx+4C],eax
+                // skip:
+                0x8B, 0x49, 0x4C,                               // mov ecx,[rcx+4C]
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrCropGrowth + 7;
+            memcpy(&code[35], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveCropGrowth, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitFriendship(uintptr_t base) {
+        uint8_t pat[] = { 0x41, 0x56, 0x57, 0x56, 0x55, 0x53, 0x48 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrFriendship = AobScan(m_hProc, base, 0x10000000, pat, mask, 7);
+        if (addrFriendship) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrFriendship, origFriendship, 5, nullptr);
+            caveFriendship = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0xBA, 0x7F, 0x96, 0x98, 0x00,                   // mov edx,9999999
+                0x41, 0x56,                                     // push r14
+                0x57,                                           // push rdi
+                0x56,                                           // push rsi
+                0x55,                                           // push rbp
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrFriendship + 5;
+            memcpy(&code[15], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveFriendship, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitPetFriendship(uintptr_t base) {
+        uint8_t pat[] = { 0x55, 0x41, 0x57, 0x41, 0x56 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrPetFriendship = AobScan(m_hProc, base, 0x10000000, pat, mask, 5);
+        if (addrPetFriendship) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrPetFriendship, origPetFriendship, 5, nullptr);
+            cavePetFriendship = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0x48, 0x8B, 0x81, 0x50, 0x04, 0x00, 0x00,       // mov rax,[rcx+450]
+                0x48, 0x85, 0xC0,                               // test rax,rax
+                0x74, 0x0B,                                     // je skip
+                0xC7, 0x40, 0x4C, 0xE8, 0x03, 0x00, 0x00,       // mov [rax+4C],3E8
+                // skip:
+                0x55,                                           // push rbp
+                0x41, 0x57,                                     // push r15
+                0x41, 0x56,                                     // push r14
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrPetFriendship + 5;
+            memcpy(&code[29], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)cavePetFriendship, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitGold(uintptr_t base) {
+        uint8_t pat[] = { 0xFF, 0x8B, 0x40, 0x4C, 0x48, 0x83, 0xC4, 0x28 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrGold = AobScan(m_hProc, base, 0x10000000, pat, mask, 8);
+        if (addrGold) {
+            ReadProcessMemory(m_hProc, (LPCVOID)(addrGold + 1), origGold, 7, nullptr);
+            caveGold = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            uintptr_t goldData = caveGold + 512;
+            
+            uint8_t code[] = {
+                0x53,                                           // push rbx
+                0x8B, 0x1D, 0x00, 0x00, 0x00, 0x00,             // mov ebx,[goldData]
+                0x85, 0xDB,                                     // test ebx,ebx
+                0x75, 0x04,                                     // jne skipinit
+                0x8B, 0x58, 0x4C,                               // mov ebx,[rax+4C]
+                0x89, 0x1D, 0x00, 0x00, 0x00, 0x00,             // mov [goldData],ebx
+                // skipinit:
+                0x8B, 0x1D, 0x00, 0x00, 0x00, 0x00,             // mov ebx,[goldData]
+                0x89, 0x58, 0x4C,                               // mov [rax+4C],ebx
+                0x5B,                                           // pop rbx
+                0x8B, 0x40, 0x4C,                               // mov eax,[rax+4C]
+                0x48, 0x83, 0xC4, 0x28,                         // add rsp,28
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            int32_t off1 = (int32_t)(goldData - (caveGold + 7));
+            memcpy(&code[3], &off1, 4);
+            
+            int32_t off2 = (int32_t)(goldData - (caveGold + 18));
+            memcpy(&code[14], &off2, 4);
+            
+            int32_t off3 = (int32_t)(goldData - (caveGold + 25));
+            memcpy(&code[21], &off3, 4);
+            
+            uintptr_t retAddr = addrGold + 8;
+            memcpy(&code[41], &retAddr, 8);
+            
+            WriteProcessMemory(m_hProc, (LPVOID)caveGold, code, sizeof(code), nullptr);
+            
+            int zero = 0;
+            WriteProcessMemory(m_hProc, (LPVOID)goldData, &zero, 4, nullptr);
+        }
+    }
+
+    void InitStackables(uintptr_t base) {
+        uint8_t pat[] = { 0x8B, 0x40, 0x4C, 0x85, 0xC0, 0x7E };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrStackables = AobScan(m_hProc, base, 0x10000000, pat, mask, 6);
+        if (addrStackables) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrStackables, origStackables, 5, nullptr);
+            caveStackables = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uint8_t code[] = {
+                0x53,                                           // push rbx
+                0xBB, 0xE7, 0x03, 0x00, 0x00,                   // mov ebx,999
+                0x89, 0x58, 0x4C,                               // mov [rax+4C],ebx
+                0x5B,                                           // pop rbx
+                0x8B, 0x40, 0x4C,                               // mov eax,[rax+4C]
+                0x85, 0xC0,                                     // test eax,eax
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            uintptr_t retAddr = addrStackables + 5;
+            memcpy(&code[19], &retAddr, 8);
+            WriteProcessMemory(m_hProc, (LPVOID)caveStackables, code, sizeof(code), nullptr);
+        }
+    }
+
+    void InitAnimalStats(uintptr_t base) {
+        uint8_t pat[] = { 0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x57 };
+        uint8_t mask[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        addrAnimalStats = AobScan(m_hProc, base, 0x10000000, pat, mask, 10);
+        if (addrAnimalStats) {
+            ReadProcessMemory(m_hProc, (LPCVOID)addrAnimalStats, origAnimalStats, 5, nullptr);
+            caveAnimalStats = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 2048, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            
+            uintptr_t flagData = caveAnimalStats + 1024;
+            
+            uint8_t code[] = {
+                // Check fullness flag
+                0x83, 0x3D, 0x00, 0x00, 0x00, 0x00, 0x00,       // cmp dword ptr [flagData],0
+                0x74, 0x14,                                     // je skip1
+                0x48, 0x8B, 0x81, 0x90, 0x01, 0x00, 0x00,       // mov rax,[rcx+190]
+                0x48, 0x85, 0xC0,                               // test rax,rax
+                0x74, 0x0A,                                     // je skip1
+                0xC7, 0x40, 0x4C, 0x0F, 0x27, 0x00, 0x00,       // mov [rax+4C],9999
+                // skip1:
+                // Check happiness flag
+                0x83, 0x3D, 0x00, 0x00, 0x00, 0x00, 0x00,       // cmp dword ptr [flagData+4],0
+                0x74, 0x14,                                     // je skip2
+                0x48, 0x8B, 0x81, 0xD0, 0x01, 0x00, 0x00,       // mov rax,[rcx+1D0]
+                0x48, 0x85, 0xC0,                               // test rax,rax
+                0x74, 0x0A,                                     // je skip2
+                0xC7, 0x40, 0x4C, 0x0F, 0x27, 0x00, 0x00,       // mov [rax+4C],9999
+                // skip2:
+                // Check friendliness flag
+                0x83, 0x3D, 0x00, 0x00, 0x00, 0x00, 0x00,       // cmp dword ptr [flagData+8],0
+                0x74, 0x14,                                     // je skip3
+                0x48, 0x8B, 0x81, 0xC8, 0x01, 0x00, 0x00,       // mov rax,[rcx+1C8]
+                0x48, 0x85, 0xC0,                               // test rax,rax
+                0x74, 0x0A,                                     // je skip3
+                0xC7, 0x40, 0x4C, 0x0F, 0x27, 0x00, 0x00,       // mov [rax+4C],9999
+                // skip3:
+                0x55,                                           // push rbp
+                0x41, 0x57,                                     // push r15
+                0x41, 0x56,                                     // push r14
+                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // jmp [return]
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // return address
+            };
+            
+            int32_t off1 = (int32_t)(flagData - (caveAnimalStats + 6));
+            memcpy(&code[2], &off1, 4);
+            
+            int32_t off2 = (int32_t)((flagData + 4) - (caveAnimalStats + 29));
+            memcpy(&code[25], &off2, 4);
+            
+            int32_t off3 = (int32_t)((flagData + 8) - (caveAnimalStats + 52));
+            memcpy(&code[48], &off3, 4);
+            
+            uintptr_t retAddr = addrAnimalStats + 5;
+            memcpy(&code[63], &retAddr, 8);
+            
+            WriteProcessMemory(m_hProc, (LPVOID)caveAnimalStats, code, sizeof(code), nullptr);
+            
+            int zero = 0;
+            WriteProcessMemory(m_hProc, (LPVOID)flagData, &zero, 4, nullptr);
+            WriteProcessMemory(m_hProc, (LPVOID)(flagData + 4), &zero, 4, nullptr);
+            WriteProcessMemory(m_hProc, (LPVOID)(flagData + 8), &zero, 4, nullptr);
+        }
+    }
+
+    void Loop() {
+        std::vector<bool> prevStates(m_features.size(), false);
+        int idx = 0;
+
+        while (m_running) {
+            // Handle hotkeys
+            for (auto& f : m_features) {
+                int vk = f.vk_code.load();
+                if (vk && (GetAsyncKeyState(vk) & 1)) f.enabled = !f.enabled;
+            }
+
+            auto it = m_features.begin();
+            idx = 0;
+
+            // Feature 0: No Clip
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrNoclip) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveNoclip, 8);
+                    MemWrite(m_hProc, addrNoclip, hook, 14);
+                } else if (addrNoclip) {
+                    MemWrite(m_hProc, addrNoclip, origNoclip, 7);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 1: Unlimited Stamina
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrStamina) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveStamina, 8);
+                    MemWrite(m_hProc, addrStamina, hook, 14);
+                    
+                    // Set enable flag
+                    int one = 1;
+                    WriteProcessMemory(m_hProc, (LPVOID)(staminaPtr + 8), &one, 4, nullptr);
+                } else if (addrStamina) {
+                    MemWrite(m_hProc, addrStamina, origStamina, 10);
+                    int zero = 0;
+                    WriteProcessMemory(m_hProc, (LPVOID)(staminaPtr + 8), &zero, 4, nullptr);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 2: Unlimited Health
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrHealth) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveHealth, 8);
+                    MemWrite(m_hProc, addrHealth, hook, 14);
+                } else if (addrHealth) {
+                    MemWrite(m_hProc, addrHealth, origHealth, 8);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 3: Super Speed
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrSpeed) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveSpeed, 8);
+                    MemWrite(m_hProc, addrSpeed, hook, 14);
+                } else if (addrSpeed) {
+                    MemWrite(m_hProc, addrSpeed, origSpeed, 6);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 4: Unlimited Items
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrItems) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveItems, 8);
+                    MemWrite(m_hProc, addrItems, hook, 14);
+                } else if (addrItems) {
+                    MemWrite(m_hProc, addrItems, origItems, 6);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 5: Unlimited Water
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrWater) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveWater, 8);
+                    MemWrite(m_hProc, addrWater, hook, 14);
+                } else if (addrWater) {
+                    MemWrite(m_hProc, addrWater, origWater, 7);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 6: Freeze Time
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrFreezeTime) {
+                    uint8_t zero = 0x00;
+                    MemWrite(m_hProc, addrFreezeTime + 6, &zero, 1);
+                } else if (addrFreezeTime) {
+                    MemWrite(m_hProc, addrFreezeTime + 6, origFreezeTime, 1);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 7: Instant Fish Bite
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrFishBite) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveFishBite, 8);
+                    MemWrite(m_hProc, addrFishBite, hook, 14);
+                } else if (addrFishBite) {
+                    MemWrite(m_hProc, addrFishBite, origFishBite, 10);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 8: Easy Fish Catch
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrFishCatch) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveFishCatch, 8);
+                    MemWrite(m_hProc, addrFishCatch, hook, 14);
+                } else if (addrFishCatch) {
+                    MemWrite(m_hProc, addrFishCatch, origFishCatch, 8);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 9: One Hit Trees
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrTrees) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveTrees, 8);
+                    MemWrite(m_hProc, addrTrees, hook, 14);
+                } else if (addrTrees) {
+                    MemWrite(m_hProc, addrTrees, origTrees, 5);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 10: Free Crafting
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrCrafting) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveCrafting, 8);
+                    MemWrite(m_hProc, addrCrafting, hook, 14);
+                } else if (addrCrafting) {
+                    MemWrite(m_hProc, addrCrafting, origCrafting, 6);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 11: Instant Crop Growth
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrCropGrowth) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveCropGrowth, 8);
+                    MemWrite(m_hProc, addrCropGrowth, hook, 14);
+                } else if (addrCropGrowth) {
+                    MemWrite(m_hProc, addrCropGrowth, origCropGrowth, 7);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 12: Max Friendship
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrFriendship) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveFriendship, 8);
+                    MemWrite(m_hProc, addrFriendship, hook, 14);
+                } else if (addrFriendship) {
+                    MemWrite(m_hProc, addrFriendship, origFriendship, 5);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 13: Max Pet Friendship
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrPetFriendship) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &cavePetFriendship, 8);
+                    MemWrite(m_hProc, addrPetFriendship, hook, 14);
+                } else if (addrPetFriendship) {
+                    MemWrite(m_hProc, addrPetFriendship, origPetFriendship, 5);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 14: Stackables to 999
+            if (it->enabled != prevStates[idx]) {
+                if (it->enabled && addrStackables) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveStackables, 8);
+                    MemWrite(m_hProc, addrStackables, hook, 14);
+                } else if (addrStackables) {
+                    MemWrite(m_hProc, addrStackables, origStackables, 5);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 15: Max Animal Fullness
+            if (it->enabled != prevStates[idx]) {
+                enableFullness = it->enabled;
+                if (addrAnimalStats) {
+                    if (!prevStates[idx] && !prevStates[idx+1] && !prevStates[idx+2]) {
+                        // First animal stat enabled
+                        uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                        memcpy(&hook[6], &caveAnimalStats, 8);
+                        MemWrite(m_hProc, addrAnimalStats, hook, 14);
+                    }
+                    int val = it->enabled ? 1 : 0;
+                    uintptr_t flagAddr = caveAnimalStats + 1024;
+                    WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 16: Max Animal Happiness
+            if (it->enabled != prevStates[idx]) {
+                enableHappiness = it->enabled;
+                if (addrAnimalStats) {
+                    if (!prevStates[idx-1] && !prevStates[idx] && !prevStates[idx+1]) {
+                        uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                        memcpy(&hook[6], &caveAnimalStats, 8);
+                        MemWrite(m_hProc, addrAnimalStats, hook, 14);
+                    }
+                    int val = it->enabled ? 1 : 0;
+                    uintptr_t flagAddr = caveAnimalStats + 1024 + 4;
+                    WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
+                }
+                prevStates[idx] = it->enabled;
+            }
+            it++; idx++;
+
+            // Feature 17: Max Animal Friendliness
+            if (it->enabled != prevStates[idx]) {
+                enableFriendliness = it->enabled;
+                if (addrAnimalStats) {
+                    if (!prevStates[idx-2] && !prevStates[idx-1] && !prevStates[idx]) {
+                        uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                        memcpy(&hook[6], &caveAnimalStats, 8);
+                        MemWrite(m_hProc, addrAnimalStats, hook, 14);
+                    }
+                    int val = it->enabled ? 1 : 0;
+                    uintptr_t flagAddr = caveAnimalStats + 1024 + 8;
+                    WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
+                    
+                    // Disable hook if all are off
+                    if (!prevStates[idx-2] && !prevStates[idx-1] && !it->enabled) {
+                        MemWrite(m_hProc, addrAnimalStats, origAnimalStats, 5);
+                    }
+                }
+                prevStates[idx] = it->enabled;
+            }
+
+            Sleep(10);
+        }
     }
 
     void Shutdown() {
         m_running = false;
         if (m_thread.joinable()) m_thread.join();
-        RemoveHooks();
-        Cleanup();
+        
+        // Restore all original bytes
+        if (addrNoclip) MemWrite(m_hProc, addrNoclip, origNoclip, 7);
+        if (addrStamina) MemWrite(m_hProc, addrStamina, origStamina, 10);
+        if (addrHealth) MemWrite(m_hProc, addrHealth, origHealth, 8);
+        if (addrSpeed) MemWrite(m_hProc, addrSpeed, origSpeed, 6);
+        if (addrItems) MemWrite(m_hProc, addrItems, origItems, 6);
+        if (addrWater) MemWrite(m_hProc, addrWater, origWater, 7);
+        if (addrFreezeTime) MemWrite(m_hProc, addrFreezeTime + 6, origFreezeTime, 1);
+        if (addrFishBite) MemWrite(m_hProc, addrFishBite, origFishBite, 10);
+        if (addrFishCatch) MemWrite(m_hProc, addrFishCatch, origFishCatch, 8);
+        if (addrTrees) MemWrite(m_hProc, addrTrees, origTrees, 5);
+        if (addrCrafting) MemWrite(m_hProc, addrCrafting, origCrafting, 6);
+        if (addrCropGrowth) MemWrite(m_hProc, addrCropGrowth, origCropGrowth, 7);
+        if (addrFriendship) MemWrite(m_hProc, addrFriendship, origFriendship, 5);
+        if (addrPetFriendship) MemWrite(m_hProc, addrPetFriendship, origPetFriendship, 5);
+        if (addrGold) MemWrite(m_hProc, addrGold + 1, origGold, 7);
+        if (addrStackables) MemWrite(m_hProc, addrStackables, origStackables, 5);
+        if (addrAnimalStats) MemWrite(m_hProc, addrAnimalStats, origAnimalStats, 5);
+        
+        if (m_hProc) CloseHandle(m_hProc);
     }
 
-    const char* GetName()    const { return "Stardew Valley Trainer"; }
-    const char* GetVersion() const { return "1.0.0"; }
-
-    int GetFeatureCount() const { return (int)m_features.size(); }
-
-    const TrainerFeatureInfo* GetFeatureInfo(int idx) const {
-        auto it = m_features.begin();
-        for (int i = 0; i < idx && it != m_features.end(); ++i) ++it;
-        return it != m_features.end() ? &it->info : nullptr;
-    }
-
-    int GetFeatureEnabled(const char* id) const {
-        for (const auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) return f.enabled.load() ? 1 : 0;
-        return 0;
-    }
-
-    void SetFeatureEnabled(const char* id, int enabled) {
-        for (auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0 && f.info.is_toggle) {
-                f.enabled = (enabled != 0);
-                return;
-            }
-    }
-
-    void ActivateFeature(const char* id) {
-        if (strcmp(id, "add_money") == 0) {
-            uintptr_t farmer = m_farmerPtr;
-            if (farmer) AddMoney(farmer, 10000);
-        }
-    }
-
-    void SetKeybind(const char* id, int vk) {
-        for (auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) { f.vk_code = vk; return; }
-    }
-
-    int GetKeybind(const char* id) const {
-        for (const auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) return f.vk_code.load();
-        return 0;
-    }
-
-private:
-    std::atomic<bool>   m_running;
-    HANDLE              m_hProc;
-    volatile uintptr_t  m_farmerPtr;
-    std::thread         m_thread;
-    std::list<Feature>  m_features;
-
-    Feature* m_fLockHealth   = nullptr;
-    Feature* m_fLockStamina  = nullptr;
-    Feature* m_fAddMoney     = nullptr;
-    Feature* m_fInstantBite  = nullptr;
-    Feature* m_fInstantCatch = nullptr;
-    Feature* m_fMaxQuality   = nullptr;
-    Feature* m_fSpeedHack    = nullptr;
-
-    HookSite   m_hkUpdate;
-    HookSite   m_hkBite;
-    HookSite   m_hkCatch;
-    HookSite   m_hkQuality;
-    uintptr_t  m_speedCaveAddr  = 0;
-    uintptr_t  m_speedOrigAddr  = 0;
-    uint8_t    m_speedOrigBytes[8] = {};
-    bool       m_speedInstalled = false;
-
-    void Cleanup() {
-        if (m_hProc) { CloseHandle(m_hProc); m_hProc = nullptr; }
-    }
-
-    // ── Hook install ──────────────────────────────────────────────────────────
-
-    bool InstallHooks() {
-        // ── 1. Game1::Update — optional, no-op trampoline reserved for future use ──
-        {
-            static const uint8_t PAT[] = { 0x57,0x56,0x55,0x53,0x48,0x81,0xEC,0x28,0x01,0x00,0x00 };
-            static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
-            if (addr) {
-                m_hkUpdate.origAddr = addr;
-                m_hkUpdate.origLen  = 11;
-                ReadProcessMemory(m_hProc, (LPCVOID)addr, m_hkUpdate.origBytes, 11, nullptr);
-
-                uintptr_t cave = AllocNear(m_hProc, addr, 64);
-                if (cave) {
-                    m_hkUpdate.caveAddr = cave;
-                    std::vector<uint8_t> caveBytes(16, 0x90);
-                    memcpy(caveBytes.data(), PAT, 11);
-                    caveBytes[11] = 0xE9;
-                    int32_t rel = (int32_t)((addr + 11) - (cave + 11) - 5);
-                    memcpy(&caveBytes[12], &rel, 4);
-                    RemoteWrite(m_hProc, cave, caveBytes.data(), 16);
-                    WriteRel32Jmp(m_hProc, addr, cave, 11);
-                    m_hkUpdate.installed = true;
-                }
-            }
-        }
-
-        // ── 2. Farmer::getMovementSpeed — captures farmer ptr (rcx = this) ───
-        {
-            static const uint8_t PAT[] = { 0x56,0x48,0x83,0xEC,0x60,0xC5,0xF8,0x77 };
-            static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
-            if (!addr) {
-                SetLastErr("AOB scan failed — Farmer::getMovementSpeed pattern not found (wrong build?)");
-                return false;
-            }
-
-            uintptr_t cave = AllocNear(m_hProc, addr, 128);
-            if (!cave) return false;
-
-            uint8_t caveBytes[128] = {};
-            caveBytes[0x00] = 0x50;
-            caveBytes[0x01] = 0x48; caveBytes[0x02] = 0x8D; caveBytes[0x03] = 0x05;
-            int32_t leaOff = (int32_t)(0x40 - 0x08);
-            memcpy(&caveBytes[0x04], &leaOff, 4);
-            caveBytes[0x08] = 0x48; caveBytes[0x09] = 0x89; caveBytes[0x0A] = 0x08;
-            caveBytes[0x0B] = 0x58;
-            memcpy(&caveBytes[0x0C], PAT, 8);
-            caveBytes[0x14] = 0xE9;
-            int32_t rel = (int32_t)((addr + 8) - (cave + 0x14) - 5);
-            memcpy(&caveBytes[0x15], &rel, 4);
-
-            RemoteWrite(m_hProc, cave, caveBytes, sizeof(caveBytes));
-            m_speedCaveAddr  = cave;
-            m_speedOrigAddr  = addr;
-            memcpy(m_speedOrigBytes, PAT, 8);
-            m_speedInstalled = true;
-            WriteRel32Jmp(m_hProc, addr, cave, 8);
-        }
-
-        // ── 3. calculateTimeUntilFishingBite — instant bite ───────────────────
-        {
-            static const uint8_t PAT[] = { 0x41,0x57,0x41,0x56,0x57,0x56,0x55,0x53,0x48,0x83,0xEC,0x38,0xC5,0xF8,0x77 };
-            static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
-            if (addr) {
-                m_hkBite.origAddr = addr;
-                m_hkBite.origLen  = 5;
-                ReadProcessMemory(m_hProc, (LPCVOID)addr, m_hkBite.origBytes, 5, nullptr);
-
-                uintptr_t cave = AllocNear(m_hProc, addr, 64);
-                if (cave) {
-                    m_hkBite.caveAddr = cave;
-                    uint8_t caveBytes[32] = {};
-                    caveBytes[0] = 0x66; caveBytes[1] = 0x0F; caveBytes[2] = 0xEF; caveBytes[3] = 0xC0;
-                    caveBytes[4] = 0xC3;
-                    memcpy(&caveBytes[8], m_hkBite.origBytes, 5);
-                    caveBytes[13] = 0xE9;
-                    int32_t rel = (int32_t)((addr + 5) - (cave + 13) - 5);
-                    memcpy(&caveBytes[14], &rel, 4);
-                    RemoteWrite(m_hProc, cave, caveBytes, sizeof(caveBytes));
-                    m_hkBite.installed = true;
-                }
-            }
-        }
-
-        // ── 4. BobberBar::update+19B9 — instant catch ────────────────────────
-        {
-            static const uint8_t PAT[] = { 0xC5,0xFA,0x10,0x86,0xC8,0x00,0x00,0x00 };
-            static const uint8_t MSK[] = { 1,1,1,1,1,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
-            if (addr) {
-                m_hkCatch.origAddr = addr;
-                m_hkCatch.origLen  = 8;
-                ReadProcessMemory(m_hProc, (LPCVOID)addr, m_hkCatch.origBytes, 8, nullptr);
-
-                uintptr_t cave = AllocNear(m_hProc, addr, 64);
-                if (cave) {
-                    m_hkCatch.caveAddr = cave;
-                    uint8_t caveBytes[32] = {};
-                    caveBytes[0] = 0xC7; caveBytes[1] = 0x86;
-                    caveBytes[2] = 0xC8; caveBytes[3] = 0x00; caveBytes[4] = 0x00; caveBytes[5] = 0x00;
-                    caveBytes[6] = 0x00; caveBytes[7] = 0x00; caveBytes[8] = 0x80; caveBytes[9] = 0x3F;
-                    memcpy(&caveBytes[10], PAT, 8);
-                    caveBytes[18] = 0xE9;
-                    int32_t rel = (int32_t)((addr + 8) - (cave + 18) - 5);
-                    memcpy(&caveBytes[19], &rel, 4);
-                    RemoteWrite(m_hProc, cave, caveBytes, sizeof(caveBytes));
-                    m_hkCatch.installed = true;
-                }
-            }
-        }
-
-        // ── 5. doPullFishFromWater+FE — force Iridium quality + treasure ──────
-        {
-            static const uint8_t PAT[] = { 0x44,0x88,0xAE,0xCC,0xCC,0xCC,0xCC,0x44,0x89,0xB6 };
-            static const uint8_t MSK[] = { 1,1,1,0,0,0,0,1,1,1 };
-            uintptr_t addr = AobFirst(m_hProc, 0, 0, PAT, MSK, sizeof(PAT));
-            if (addr) {
-                m_hkQuality.origAddr = addr;
-                m_hkQuality.origLen  = 7;
-                ReadProcessMemory(m_hProc, (LPCVOID)addr, m_hkQuality.origBytes, 7, nullptr);
-
-                uintptr_t cave = AllocNear(m_hProc, addr, 64);
-                if (cave) {
-                    m_hkQuality.caveAddr = cave;
-                    uint8_t caveBytes[32] = {};
-                    size_t off = 0;
-                    caveBytes[off++] = 0x41; caveBytes[off++] = 0xB5; caveBytes[off++] = 0x01;
-                    caveBytes[off++] = 0x41; caveBytes[off++] = 0xBF;
-                    caveBytes[off++] = 0x04; caveBytes[off++] = 0x00; caveBytes[off++] = 0x00; caveBytes[off++] = 0x00;
-                    memcpy(&caveBytes[off], m_hkQuality.origBytes, 7); off += 7;
-                    caveBytes[off++] = 0xE9;
-                    int32_t rel = (int32_t)((addr + 7) - (cave + off) - 4);
-                    memcpy(&caveBytes[off], &rel, 4);
-                    RemoteWrite(m_hProc, cave, caveBytes, sizeof(caveBytes));
-                    m_hkQuality.installed = true;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    void RemoveHooks() {
-        auto restore = [&](HookSite& h) {
-            if (h.installed && h.origAddr && m_hProc) {
-                RemoteWrite(m_hProc, h.origAddr, h.origBytes, h.origLen);
-                if (h.caveAddr) VirtualFreeEx(m_hProc, (LPVOID)h.caveAddr, 0, MEM_RELEASE);
-            }
-            h = {};
-        };
-        restore(m_hkUpdate);
-        restore(m_hkBite);
-        restore(m_hkCatch);
-        restore(m_hkQuality);
-
-        if (m_speedInstalled && m_speedOrigAddr && m_hProc) {
-            RemoteWrite(m_hProc, m_speedOrigAddr, m_speedOrigBytes, 8);
-            if (m_speedCaveAddr) VirtualFreeEx(m_hProc, (LPVOID)m_speedCaveAddr, 0, MEM_RELEASE);
-        }
-        m_speedInstalled = false;
-        m_speedOrigAddr  = 0;
-        m_speedCaveAddr  = 0;
-    }
-
-    // ── Hook enable/disable ───────────────────────────────────────────────────
-
-    void EnableHook(HookSite& h) {
-        if (!h.installed || !m_hProc) return;
-        WriteRel32Jmp(m_hProc, h.origAddr, h.caveAddr, h.origLen);
-    }
-
-    void DisableHook(HookSite& h) {
-        if (!h.installed || !m_hProc) return;
-        RemoteWrite(m_hProc, h.origAddr, h.origBytes, h.origLen);
-    }
-
-    // ── Stat helpers ──────────────────────────────────────────────────────────
-
-    uintptr_t ReadFarmerPtr() {
-        if (!m_speedCaveAddr) return 0;
-        uintptr_t ptr = 0;
-        RemoteRead(m_hProc, m_speedCaveAddr + 0x40, ptr);
-        return ptr;
-    }
-
-    void LockHealth(uintptr_t farmer) {
-        int32_t maxHp = 0;
-        if (!RemoteRead(m_hProc, farmer + OFF_MAX_HEALTH, maxHp) || maxHp <= 0) return;
-        RemoteWrite(m_hProc, farmer + OFF_HEALTH, maxHp);
-    }
-
-    void LockStamina(uintptr_t farmer) {
-        uintptr_t netStaminaPtr = 0;
-        if (!RemoteRead(m_hProc, farmer + OFF_NET_STAMINA_PTR, netStaminaPtr) || !netStaminaPtr) return;
-        uintptr_t maxStaminaPtr = 0;
-        if (!RemoteRead(m_hProc, farmer + OFF_MAX_STAMINA_PTR, maxStaminaPtr) || !maxStaminaPtr) return;
-        int32_t maxStam = 0;
-        if (!RemoteRead(m_hProc, maxStaminaPtr + OFF_NETINT_VALUE, maxStam) || maxStam <= 0) return;
-        float maxStamF = static_cast<float>(maxStam);
-        RemoteWrite(m_hProc, netStaminaPtr + OFF_NETFLOAT_VALUE, maxStamF);
-    }
-
-    void AddMoney(uintptr_t farmer, int32_t amount) {
-        uintptr_t teamRootPtr = 0;
-        if (!RemoteRead(m_hProc, farmer + OFF_TEAM_ROOT_PTR, teamRootPtr) || !teamRootPtr) return;
-        uintptr_t teamPtr = 0;
-        if (!RemoteRead(m_hProc, teamRootPtr + OFF_NETREF_VALUE, teamPtr) || !teamPtr) return;
-        uintptr_t moneyNetPtr = 0;
-        if (!RemoteRead(m_hProc, teamPtr + OFF_TEAM_MONEY_PTR, moneyNetPtr) || !moneyNetPtr) return;
-        int32_t current = 0;
-        RemoteRead(m_hProc, moneyNetPtr + OFF_NETINT_VALUE, current);
-        RemoteWrite(m_hProc, moneyNetPtr + OFF_NETINT_VALUE, current + amount);
-    }
-
-    void SetSpeedBonus(uintptr_t farmer, int32_t bonus) {
-        uintptr_t netSpeedPtr = 0;
-        if (!RemoteRead(m_hProc, farmer + OFF_NET_SPEED_PTR, netSpeedPtr) || !netSpeedPtr) return;
-        RemoteWrite(m_hProc, netSpeedPtr + OFF_NETINT_VALUE, bonus);
-    }
-
-    // ── Main loop ─────────────────────────────────────────────────────────────
-
-    void Loop() {
-        bool prevBite    = false;
-        bool prevCatch   = false;
-        bool prevQuality = false;
-        bool prevSpeed   = false;
-
-        while (m_running) {
-            // Refresh farmer pointer
-            uintptr_t farmer = ReadFarmerPtr();
-            if (farmer) m_farmerPtr = farmer;
-            farmer = m_farmerPtr;
-
-            // Hotkey dispatch
-            for (auto& f : m_features) {
-                int vk = f.vk_code.load();
-                if (vk && (GetAsyncKeyState(vk) & 1)) {
-                    if (f.info.is_toggle)
-                        f.enabled = !f.enabled.load();
-                    else
-                        ActivateFeature(f.info.id);
-                }
-            }
-
-            // Apply hook patches on toggle state change
-            bool bite = m_fInstantBite->enabled.load();
-            if (bite != prevBite) {
-                if (bite) EnableHook(m_hkBite); else DisableHook(m_hkBite);
-                prevBite = bite;
-            }
-            bool cat = m_fInstantCatch->enabled.load();
-            if (cat != prevCatch) {
-                if (cat) EnableHook(m_hkCatch); else DisableHook(m_hkCatch);
-                prevCatch = cat;
-            }
-            bool qual = m_fMaxQuality->enabled.load();
-            if (qual != prevQuality) {
-                if (qual) EnableHook(m_hkQuality); else DisableHook(m_hkQuality);
-                prevQuality = qual;
-            }
-
-            // Continuous stat locks
-            if (farmer) {
-                if (m_fLockHealth->enabled.load())  LockHealth(farmer);
-                if (m_fLockStamina->enabled.load()) LockStamina(farmer);
-
-                bool spd = m_fSpeedHack->enabled.load();
-                if (spd != prevSpeed) {
-                    SetSpeedBonus(farmer, spd ? 10 : 0);
-                    prevSpeed = spd;
-                }
-            }
-
-            Sleep(100);
-        }
-
-        // Shutdown: restore all active patches
-        if (m_fInstantBite->enabled.load())  DisableHook(m_hkBite);
-        if (m_fInstantCatch->enabled.load()) DisableHook(m_hkCatch);
-        if (m_fMaxQuality->enabled.load())   DisableHook(m_hkQuality);
-        if (m_fSpeedHack->enabled.load() && m_farmerPtr) SetSpeedBonus(m_farmerPtr, 0);
-    }
+    int GetFeatureCount() { return (int)m_features.size(); }
+    const TrainerFeatureInfo* GetFeatureInfo(int idx) { auto it = m_features.begin(); std::advance(it, idx); return &it->info; }
+    int GetFeatureEnabled(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.enabled; return 0; }
+    void SetFeatureEnabled(const char* id, int en) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.enabled = (en != 0); }
+    void ActivateFeature(const char* id) {}
+    void SetKeybind(const char* id, int vk) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.vk_code = vk; }
+    int GetKeybind(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.vk_code.load(); return 0; }
+    const char* GetName() { return "Farming Game Trainer"; }
+    const char* GetVersion() { return "1.0.0"; }
 };
 
-// ── C ABI exports ─────────────────────────────────────────────────────────────
-
 extern "C" {
-
-void* trainer_create()            { return new StardewTrainer(); }
-void  trainer_destroy(void* h)    { delete static_cast<StardewTrainer*>(h); }
-int   trainer_initialize(void* h) { return static_cast<StardewTrainer*>(h)->Initialize() ? 1 : 0; }
-void  trainer_shutdown(void* h)   { static_cast<StardewTrainer*>(h)->Shutdown(); }
-
-const char* trainer_get_name(void* h)    { return static_cast<StardewTrainer*>(h)->GetName(); }
-const char* trainer_get_version(void* h) { return static_cast<StardewTrainer*>(h)->GetVersion(); }
-
-int trainer_get_feature_count(void* h)
-    { return static_cast<StardewTrainer*>(h)->GetFeatureCount(); }
-const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx)
-    { return static_cast<StardewTrainer*>(h)->GetFeatureInfo(idx); }
-int trainer_get_feature_enabled(void* h, const char* id)
-    { return static_cast<StardewTrainer*>(h)->GetFeatureEnabled(id); }
-void trainer_set_feature_enabled(void* h, const char* id, int en)
-    { static_cast<StardewTrainer*>(h)->SetFeatureEnabled(id, en); }
-void trainer_activate_feature(void* h, const char* id)
-    { static_cast<StardewTrainer*>(h)->ActivateFeature(id); }
-void trainer_set_keybind(void* h, const char* id, int vk)
-    { static_cast<StardewTrainer*>(h)->SetKeybind(id, vk); }
-int trainer_get_keybind(void* h, const char* id)
-    { return static_cast<StardewTrainer*>(h)->GetKeybind(id); }
-
-const char* trainer_get_last_error() { return g_lastError; }
-
-} // extern "C"
+    __declspec(dllexport) void* trainer_create() { return new FarmingGameTrainer(); }
+    __declspec(dllexport) void  trainer_destroy(void* h) { delete static_cast<FarmingGameTrainer*>(h); }
+    __declspec(dllexport) int   trainer_initialize(void* h) { return static_cast<FarmingGameTrainer*>(h)->Initialize() ? 1 : 0; }
+    __declspec(dllexport) void  trainer_shutdown(void* h) { static_cast<FarmingGameTrainer*>(h)->Shutdown(); }
+    __declspec(dllexport) const char* trainer_get_name(void* h) { return static_cast<FarmingGameTrainer*>(h)->GetName(); }
+    __declspec(dllexport) const char* trainer_get_version(void* h) { return static_cast<FarmingGameTrainer*>(h)->GetVersion(); }
+    __declspec(dllexport) int trainer_get_feature_count(void* h) { return static_cast<FarmingGameTrainer*>(h)->GetFeatureCount(); }
+    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx) { return static_cast<FarmingGameTrainer*>(h)->GetFeatureInfo(idx); }
+    __declspec(dllexport) int trainer_get_feature_enabled(void* h, const char* id) { return static_cast<FarmingGameTrainer*>(h)->GetFeatureEnabled(id); }
+    __declspec(dllexport) void trainer_set_feature_enabled(void* h, const char* id, int en) { static_cast<FarmingGameTrainer*>(h)->SetFeatureEnabled(id, en); }
+    __declspec(dllexport) void trainer_activate_feature(void* h, const char* id) { static_cast<FarmingGameTrainer*>(h)->ActivateFeature(id); }
+    __declspec(dllexport) void trainer_set_keybind(void* h, const char* id, int vk) { static_cast<FarmingGameTrainer*>(h)->SetKeybind(id, vk); }
+    __declspec(dllexport) int trainer_get_keybind(void* h, const char* id) { return static_cast<FarmingGameTrainer*>(h)->GetKeybind(id); }
+    __declspec(dllexport) const char* trainer_get_last_error() { return "No errors reported."; }
+}
