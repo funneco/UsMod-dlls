@@ -670,278 +670,277 @@ public:
     }
 
     void Loop() {
-        std::vector<bool> prevStates(m_features.size(), false);
-        int idx = 0;
+    std::vector<bool> prevStates(m_features.size(), false);
+    int idx = 0;
 
-        while (m_running) {
-            // Handle hotkeys
-            for (auto& f : m_features) {
-                int vk = f.vk_code.load();
-                if (vk && (GetAsyncKeyState(vk) & 1)) f.enabled = !f.enabled;
+    while (m_running) {
+        // Handle hotkeys
+        for (auto& f : m_features) {
+            int vk = f.vk_code.load();
+            if (vk && (GetAsyncKeyState(vk) & 1)) {
+                f.enabled.store(!f.enabled.load());
             }
-
-            auto it = m_features.begin();
-            idx = 0;
-
-            // Feature 0: No Clip
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrNoclip) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveNoclip, 8);
-                    MemWrite(m_hProc, addrNoclip, hook, 14);
-                } else if (addrNoclip) {
-                    MemWrite(m_hProc, addrNoclip, origNoclip, 7);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 1: Unlimited Stamina
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrStamina) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveStamina, 8);
-                    MemWrite(m_hProc, addrStamina, hook, 14);
-                    
-                    // Set enable flag
-                    int one = 1;
-                    WriteProcessMemory(m_hProc, (LPVOID)(staminaPtr + 8), &one, 4, nullptr);
-                } else if (addrStamina) {
-                    MemWrite(m_hProc, addrStamina, origStamina, 10);
-                    int zero = 0;
-                    WriteProcessMemory(m_hProc, (LPVOID)(staminaPtr + 8), &zero, 4, nullptr);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 2: Unlimited Health
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrHealth) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveHealth, 8);
-                    MemWrite(m_hProc, addrHealth, hook, 14);
-                } else if (addrHealth) {
-                    MemWrite(m_hProc, addrHealth, origHealth, 8);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 3: Super Speed
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrSpeed) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveSpeed, 8);
-                    MemWrite(m_hProc, addrSpeed, hook, 14);
-                } else if (addrSpeed) {
-                    MemWrite(m_hProc, addrSpeed, origSpeed, 6);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 4: Unlimited Items
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrItems) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveItems, 8);
-                    MemWrite(m_hProc, addrItems, hook, 14);
-                } else if (addrItems) {
-                    MemWrite(m_hProc, addrItems, origItems, 6);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 5: Unlimited Water
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrWater) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveWater, 8);
-                    MemWrite(m_hProc, addrWater, hook, 14);
-                } else if (addrWater) {
-                    MemWrite(m_hProc, addrWater, origWater, 7);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 6: Freeze Time
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrFreezeTime) {
-                    uint8_t zero = 0x00;
-                    MemWrite(m_hProc, addrFreezeTime + 6, &zero, 1);
-                } else if (addrFreezeTime) {
-                    MemWrite(m_hProc, addrFreezeTime + 6, origFreezeTime, 1);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 7: Instant Fish Bite
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrFishBite) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveFishBite, 8);
-                    MemWrite(m_hProc, addrFishBite, hook, 14);
-                } else if (addrFishBite) {
-                    MemWrite(m_hProc, addrFishBite, origFishBite, 10);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 8: Easy Fish Catch
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrFishCatch) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveFishCatch, 8);
-                    MemWrite(m_hProc, addrFishCatch, hook, 14);
-                } else if (addrFishCatch) {
-                    MemWrite(m_hProc, addrFishCatch, origFishCatch, 8);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 9: One Hit Trees
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrTrees) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveTrees, 8);
-                    MemWrite(m_hProc, addrTrees, hook, 14);
-                } else if (addrTrees) {
-                    MemWrite(m_hProc, addrTrees, origTrees, 5);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 10: Free Crafting
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrCrafting) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveCrafting, 8);
-                    MemWrite(m_hProc, addrCrafting, hook, 14);
-                } else if (addrCrafting) {
-                    MemWrite(m_hProc, addrCrafting, origCrafting, 6);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 11: Instant Crop Growth
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrCropGrowth) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveCropGrowth, 8);
-                    MemWrite(m_hProc, addrCropGrowth, hook, 14);
-                } else if (addrCropGrowth) {
-                    MemWrite(m_hProc, addrCropGrowth, origCropGrowth, 7);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 12: Max Friendship
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrFriendship) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveFriendship, 8);
-                    MemWrite(m_hProc, addrFriendship, hook, 14);
-                } else if (addrFriendship) {
-                    MemWrite(m_hProc, addrFriendship, origFriendship, 5);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 13: Max Pet Friendship
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrPetFriendship) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &cavePetFriendship, 8);
-                    MemWrite(m_hProc, addrPetFriendship, hook, 14);
-                } else if (addrPetFriendship) {
-                    MemWrite(m_hProc, addrPetFriendship, origPetFriendship, 5);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 14: Stackables to 999
-            if (it->enabled != prevStates[idx]) {
-                if (it->enabled && addrStackables) {
-                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                    memcpy(&hook[6], &caveStackables, 8);
-                    MemWrite(m_hProc, addrStackables, hook, 14);
-                } else if (addrStackables) {
-                    MemWrite(m_hProc, addrStackables, origStackables, 5);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 15: Max Animal Fullness
-            if (it->enabled != prevStates[idx]) {
-                enableFullness = it->enabled;
-                if (addrAnimalStats) {
-                    if (!prevStates[idx] && !prevStates[idx+1] && !prevStates[idx+2]) {
-                        // First animal stat enabled
-                        uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                        memcpy(&hook[6], &caveAnimalStats, 8);
-                        MemWrite(m_hProc, addrAnimalStats, hook, 14);
-                    }
-                    int val = it->enabled ? 1 : 0;
-                    uintptr_t flagAddr = caveAnimalStats + 1024;
-                    WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 16: Max Animal Happiness
-            if (it->enabled != prevStates[idx]) {
-                enableHappiness = it->enabled;
-                if (addrAnimalStats) {
-                    if (!prevStates[idx-1] && !prevStates[idx] && !prevStates[idx+1]) {
-                        uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                        memcpy(&hook[6], &caveAnimalStats, 8);
-                        MemWrite(m_hProc, addrAnimalStats, hook, 14);
-                    }
-                    int val = it->enabled ? 1 : 0;
-                    uintptr_t flagAddr = caveAnimalStats + 1024 + 4;
-                    WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
-                }
-                prevStates[idx] = it->enabled;
-            }
-            it++; idx++;
-
-            // Feature 17: Max Animal Friendliness
-            if (it->enabled != prevStates[idx]) {
-                enableFriendliness = it->enabled;
-                if (addrAnimalStats) {
-                    if (!prevStates[idx-2] && !prevStates[idx-1] && !prevStates[idx]) {
-                        uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-                        memcpy(&hook[6], &caveAnimalStats, 8);
-                        MemWrite(m_hProc, addrAnimalStats, hook, 14);
-                    }
-                    int val = it->enabled ? 1 : 0;
-                    uintptr_t flagAddr = caveAnimalStats + 1024 + 8;
-                    WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
-                    
-                    // Disable hook if all are off
-                    if (!prevStates[idx-2] && !prevStates[idx-1] && !it->enabled) {
-                        MemWrite(m_hProc, addrAnimalStats, origAnimalStats, 5);
-                    }
-                }
-                prevStates[idx] = it->enabled;
-            }
-
-            Sleep(10);
         }
+
+        auto it = m_features.begin();
+        idx = 0;
+
+        // Feature 0: No Clip
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrNoclip) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveNoclip, 8);
+                MemWrite(m_hProc, addrNoclip, hook, 14);
+            } else if (addrNoclip) {
+                MemWrite(m_hProc, addrNoclip, origNoclip, 7);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 1: Unlimited Stamina
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrStamina) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveStamina, 8);
+                MemWrite(m_hProc, addrStamina, hook, 14);
+                
+                int one = 1;
+                WriteProcessMemory(m_hProc, (LPVOID)(staminaPtr + 8), &one, 4, nullptr);
+            } else if (addrStamina) {
+                MemWrite(m_hProc, addrStamina, origStamina, 10);
+                int zero = 0;
+                WriteProcessMemory(m_hProc, (LPVOID)(staminaPtr + 8), &zero, 4, nullptr);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 2: Unlimited Health
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrHealth) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveHealth, 8);
+                MemWrite(m_hProc, addrHealth, hook, 14);
+            } else if (addrHealth) {
+                MemWrite(m_hProc, addrHealth, origHealth, 8);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 3: Super Speed
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrSpeed) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveSpeed, 8);
+                MemWrite(m_hProc, addrSpeed, hook, 14);
+            } else if (addrSpeed) {
+                MemWrite(m_hProc, addrSpeed, origSpeed, 6);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 4: Unlimited Items
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrItems) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveItems, 8);
+                MemWrite(m_hProc, addrItems, hook, 14);
+            } else if (addrItems) {
+                MemWrite(m_hProc, addrItems, origItems, 6);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 5: Unlimited Water
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrWater) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveWater, 8);
+                MemWrite(m_hProc, addrWater, hook, 14);
+            } else if (addrWater) {
+                MemWrite(m_hProc, addrWater, origWater, 7);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 6: Freeze Time
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrFreezeTime) {
+                uint8_t zero = 0x00;
+                MemWrite(m_hProc, addrFreezeTime + 6, &zero, 1);
+            } else if (addrFreezeTime) {
+                MemWrite(m_hProc, addrFreezeTime + 6, origFreezeTime, 1);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 7: Instant Fish Bite
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrFishBite) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveFishBite, 8);
+                MemWrite(m_hProc, addrFishBite, hook, 14);
+            } else if (addrFishBite) {
+                MemWrite(m_hProc, addrFishBite, origFishBite, 10);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 8: Easy Fish Catch
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrFishCatch) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveFishCatch, 8);
+                MemWrite(m_hProc, addrFishCatch, hook, 14);
+            } else if (addrFishCatch) {
+                MemWrite(m_hProc, addrFishCatch, origFishCatch, 8);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 9: One Hit Trees
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrTrees) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveTrees, 8);
+                MemWrite(m_hProc, addrTrees, hook, 14);
+            } else if (addrTrees) {
+                MemWrite(m_hProc, addrTrees, origTrees, 5);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 10: Free Crafting
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrCrafting) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveCrafting, 8);
+                MemWrite(m_hProc, addrCrafting, hook, 14);
+            } else if (addrCrafting) {
+                MemWrite(m_hProc, addrCrafting, origCrafting, 6);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 11: Instant Crop Growth
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrCropGrowth) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveCropGrowth, 8);
+                MemWrite(m_hProc, addrCropGrowth, hook, 14);
+            } else if (addrCropGrowth) {
+                MemWrite(m_hProc, addrCropGrowth, origCropGrowth, 7);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 12: Max Friendship
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrFriendship) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveFriendship, 8);
+                MemWrite(m_hProc, addrFriendship, hook, 14);
+            } else if (addrFriendship) {
+                MemWrite(m_hProc, addrFriendship, origFriendship, 5);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 13: Max Pet Friendship
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrPetFriendship) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &cavePetFriendship, 8);
+                MemWrite(m_hProc, addrPetFriendship, hook, 14);
+            } else if (addrPetFriendship) {
+                MemWrite(m_hProc, addrPetFriendship, origPetFriendship, 5);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 14: Stackables to 999
+        if (it->enabled.load() != prevStates[idx]) {
+            if (it->enabled.load() && addrStackables) {
+                uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                memcpy(&hook[6], &caveStackables, 8);
+                MemWrite(m_hProc, addrStackables, hook, 14);
+            } else if (addrStackables) {
+                MemWrite(m_hProc, addrStackables, origStackables, 5);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 15: Max Animal Fullness
+        if (it->enabled.load() != prevStates[idx]) {
+            enableFullness.store(it->enabled.load());
+            if (addrAnimalStats) {
+                if (!prevStates[idx] && !prevStates[idx+1] && !prevStates[idx+2]) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveAnimalStats, 8);
+                    MemWrite(m_hProc, addrAnimalStats, hook, 14);
+                }
+                int val = it->enabled.load() ? 1 : 0;
+                uintptr_t flagAddr = caveAnimalStats + 1024;
+                WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 16: Max Animal Happiness
+        if (it->enabled.load() != prevStates[idx]) {
+            enableHappiness.store(it->enabled.load());
+            if (addrAnimalStats) {
+                if (!prevStates[idx-1] && !prevStates[idx] && !prevStates[idx+1]) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveAnimalStats, 8);
+                    MemWrite(m_hProc, addrAnimalStats, hook, 14);
+                }
+                int val = it->enabled.load() ? 1 : 0;
+                uintptr_t flagAddr = caveAnimalStats + 1024 + 4;
+                WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+        it++; idx++;
+
+        // Feature 17: Max Animal Friendliness
+        if (it->enabled.load() != prevStates[idx]) {
+            enableFriendliness.store(it->enabled.load());
+            if (addrAnimalStats) {
+                if (!prevStates[idx-2] && !prevStates[idx-1] && !prevStates[idx]) {
+                    uint8_t hook[14] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+                    memcpy(&hook[6], &caveAnimalStats, 8);
+                    MemWrite(m_hProc, addrAnimalStats, hook, 14);
+                }
+                int val = it->enabled.load() ? 1 : 0;
+                uintptr_t flagAddr = caveAnimalStats + 1024 + 8;
+                WriteProcessMemory(m_hProc, (LPVOID)flagAddr, &val, 4, nullptr);
+                
+                if (!prevStates[idx-2] && !prevStates[idx-1] && !it->enabled.load()) {
+                    MemWrite(m_hProc, addrAnimalStats, origAnimalStats, 5);
+                }
+            }
+            prevStates[idx] = it->enabled.load();
+        }
+
+        Sleep(10);
     }
+}
 
     void Shutdown() {
         m_running = false;
@@ -971,8 +970,8 @@ public:
 
     int GetFeatureCount() { return (int)m_features.size(); }
     const TrainerFeatureInfo* GetFeatureInfo(int idx) { auto it = m_features.begin(); std::advance(it, idx); return &it->info; }
-    int GetFeatureEnabled(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.enabled; return 0; }
-    void SetFeatureEnabled(const char* id, int en) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.enabled = (en != 0); }
+    int GetFeatureEnabled(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.enabled.load(); return 0; }
+    void SetFeatureEnabled(const char* id, int en) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.enabled.store(en != 0); }
     void ActivateFeature(const char* id) {}
     void SetKeybind(const char* id, int vk) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.vk_code = vk; }
     int GetKeybind(const char* id) { for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.vk_code.load(); return 0; }
