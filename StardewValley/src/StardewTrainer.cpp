@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <tlhelp32.h>
+#include <algorithm>
 #include <vector>
 #include <list>
 #include <thread>
@@ -126,7 +127,7 @@ static uintptr_t AllocNear(HANDLE hProc, uintptr_t target, size_t size) {
     GetSystemInfo(&si);
     const uintptr_t range = 0x70000000ULL;
     uintptr_t lo = (target > range) ? target - range : (uintptr_t)si.lpMinimumApplicationAddress;
-    uintptr_t hi = min(target + range, (uintptr_t)si.lpMaximumApplicationAddress);
+    uintptr_t hi = (std::min)(target + range, (uintptr_t)si.lpMaximumApplicationAddress);
 
     MEMORY_BASIC_INFORMATION mbi;
     // Search forward
