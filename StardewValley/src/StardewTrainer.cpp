@@ -253,10 +253,12 @@ public:
     uintptr_t addrFriendship  = 0;
     uintptr_t addrPetFriend   = 0;
     uintptr_t addrStackables  = 0;
+    uintptr_t addrGold        = 0;
 
     Hook hookHealth, hookStamina, hookSpeed, hookWater;
     Hook hookFishBite, hookFishCatch, hookFreeCraft;
     Hook hookCropGrowth, hookFriendship, hookPetFriend, hookStackables;
+    Hook hookAnimalStats, hookGold;
 
     StardewTrainer() {
         m_features.emplace_back("noclip",            "No Clip",              "Walk through walls",           1, VK_F1);
@@ -274,6 +276,8 @@ public:
         m_features.emplace_back("max_friendship",    "Max Friendship",       "Max friendship when talking",  1, VK_NUMPAD1);
         m_features.emplace_back("max_pet_friendship","Max Pet Friendship",   "Pet friendship set to 1000",   1, VK_NUMPAD2);
         m_features.emplace_back("stackables_999",    "Stackables to 999",    "Stack size reported as 999",   1, VK_NUMPAD3);
+        m_features.emplace_back("max_animal_stats",  "Max Animal Stats",     "Animals always full/happy/friendly", 1, VK_NUMPAD4);
+        m_features.emplace_back("set_gold",          "Set Max Gold",         "Gold set to 999,999,999",      1, VK_NUMPAD5);
     }
 
     bool Initialize() {
@@ -310,11 +314,12 @@ public:
             }
         }
 
-        // Unlimited Health: vcvtsi2ss xmm0,[rcx+6EC]
-        // Pattern: C5 FA 2A 81 EC 06 00 00
+        // Unlimited Health: vcvtsi2ss xmm0,[rcx+6EC] followed by vxorps xmm1/vcvtsi2ss xmm1
+        // Pattern: C5 FA 2A 81 EC 06 00 00 C5 F0 57 C9 C5 F2 2A CA
         {
-            const uint8_t pat[] = { 0xC5, 0xFA, 0x2A, 0x81, 0xEC, 0x06, 0x00, 0x00 };
-            addrHealth = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxx");
+            const uint8_t pat[] = { 0xC5, 0xFA, 0x2A, 0x81, 0xEC, 0x06, 0x00, 0x00,
+                                    0xC5, 0xF0, 0x57, 0xC9, 0xC5, 0xF2, 0x2A, 0xCA };
+            addrHealth = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxx");
         }
 
         // Unlimited Stamina: mov rcx,[rcx]; mov rcx,[rcx+4D0]; vmovss xmm9,[rcx+4C]
@@ -325,12 +330,15 @@ public:
             addrStamina = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxx");
         }
 
-        // Super Speed: function prolog of GetMovementSpeed
-        // Pattern (long, to be specific): 57 56 48 83 EC 68 C5 F8 77 C5 F8 29 74 24 50
+        // Super Speed: function prolog of GetMovementSpeed (extended for uniqueness)
+        // Pattern: 57 56 48 83 EC 68 C5 F8 77 C5 F8 29 74 24 50 C5 F8 29 7C 24 40 48 8B F1 48 8B 8E 20 05 00 00 80 79 4D 00
         {
-            const uint8_t pat[] = { 0x57, 0x56, 0x48, 0x83, 0xEC, 0x68, 0xC5, 0xF8, 0x77,
-                                    0xC5, 0xF8, 0x29, 0x74, 0x24, 0x50 };
-            addrSpeed = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxx");
+            const uint8_t pat[] = {
+                0x57, 0x56, 0x48, 0x83, 0xEC, 0x68, 0xC5, 0xF8, 0x77,
+                0xC5, 0xF8, 0x29, 0x74, 0x24, 0x50, 0xC5, 0xF8, 0x29,
+                0x7C, 0x24, 0x40, 0x48, 0x8B, 0xF1, 0x48, 0x8B, 0x8E,
+                0x20, 0x05, 0x00, 0x00, 0x80, 0x79, 0x4D, 0x00 };
+            addrSpeed = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
         }
 
         // Unlimited Items: lea ebp,[rax-1] -> lea ebp,[rax+0]  (one byte change at +2)
@@ -345,11 +353,11 @@ public:
             }
         }
 
-        // Unlimited Water: mov r8,[rsi+108]
-        // Pattern: 4C 8B 86 08 01 00 00
+        // Unlimited Water: mov r8,[rsi+108] followed by mov r8d,[r8+4C]
+        // Pattern: 4C 8B 86 08 01 00 00 45 8B 40 4C
         {
-            const uint8_t pat[] = { 0x4C, 0x8B, 0x86, 0x08, 0x01, 0x00, 0x00 };
-            addrWater = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxx");
+            const uint8_t pat[] = { 0x4C, 0x8B, 0x86, 0x08, 0x01, 0x00, 0x00, 0x45, 0x8B, 0x40, 0x4C };
+            addrWater = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxx");
         }
 
         // Freeze Time: add dword ptr [counter],0A  ->  patch immediate to 00
@@ -366,25 +374,29 @@ public:
             }
         }
 
-        // Instant Fish Bite: vmovaps xmm0,xmm6; vmovaps xmm6,[rsp+20]
-        // Pattern: C5 F8 28 C6 C5 F8 28 74 24 20
+        // Instant Fish Bite: vmovaps xmm0,xmm6; vmovaps xmm6,[rsp+20] + epilog
+        // Pattern: C5 F8 28 C6 C5 F8 28 74 24 20 48 83 C4 38 5B 5D 5E 5F 41 5C 41 5D 41 5E 41 5F C3
         {
-            const uint8_t pat[] = { 0xC5, 0xF8, 0x28, 0xC6, 0xC5, 0xF8, 0x28, 0x74, 0x24, 0x20 };
-            addrFishBite = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxx");
+            const uint8_t pat[] = {
+                0xC5, 0xF8, 0x28, 0xC6, 0xC5, 0xF8, 0x28, 0x74, 0x24, 0x20,
+                0x48, 0x83, 0xC4, 0x38, 0x5B, 0x5D, 0x5E, 0x5F,
+                0x41, 0x5C, 0x41, 0x5D, 0x41, 0x5E, 0x41, 0x5F, 0xC3 };
+            addrFishBite = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxxxxxxxxxxxxx");
         }
 
-        // Easy Fish Catch: movss [rcx+E8],xmm0
-        // Pattern: F3 0F 11 81 E8 00 00 00
+        // Easy Fish Catch: movss [rcx+E8],xmm0 followed by movss xmm1,[rcx+...]
+        // Pattern: F3 0F 11 81 E8 00 00 00 F3 0F 10 89
         {
-            const uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x81, 0xE8, 0x00, 0x00, 0x00 };
-            addrFishCatch = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxx");
+            const uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x81, 0xE8, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x10, 0x89 };
+            addrFishCatch = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxx");
         }
 
         // One Hit Trees: vmovss xmm1,[rcx+4C]  ->  vxorps xmm1,xmm1,xmm1 + nop
-        // Pattern: C5 FA 10 49 4C C4 C1 72 5C C8
+        // Pattern: C5 FA 10 49 4C C4 C1 72 5C C8 48 8B 01 48 8B 40 60
         {
-            const uint8_t pat[] = { 0xC5, 0xFA, 0x10, 0x49, 0x4C, 0xC4, 0xC1, 0x72, 0x5C, 0xC8 };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxx");
+            const uint8_t pat[] = { 0xC5, 0xFA, 0x10, 0x49, 0x4C, 0xC4, 0xC1, 0x72, 0x5C, 0xC8,
+                                    0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x60 };
+            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxxx");
             if (a) {
                 pTrees.addr     = a;
                 pTrees.original = { 0xC5, 0xFA, 0x10, 0x49, 0x4C };
@@ -392,11 +404,11 @@ public:
             }
         }
 
-        // Free Crafting: mov edx,[rax+38]; sub edx,[rax+40]
-        // Pattern: 8B 50 38 2B 50 40
+        // Free Crafting: mov edx,[rax+38]; sub edx,[rax+40] followed by lea eax/lea r13d
+        // Pattern: 8B 50 38 2B 50 40 8D 04 D2 44 8D 2C 81
         {
-            const uint8_t pat[] = { 0x8B, 0x50, 0x38, 0x2B, 0x50, 0x40 };
-            addrFreeCraft = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxx");
+            const uint8_t pat[] = { 0x8B, 0x50, 0x38, 0x2B, 0x50, 0x40, 0x8D, 0x04, 0xD2, 0x44, 0x8D, 0x2C, 0x81 };
+            addrFreeCraft = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxx");
         }
 
         // Instant Crop Growth: mov rcx,[rsi+28]; mov ecx,[rcx+4C]
@@ -425,6 +437,13 @@ public:
         {
             const uint8_t pat[] = { 0x8B, 0x40, 0x4C, 0x85, 0xC0, 0x7E };
             addrStackables = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxx");
+        }
+
+        // Set Gold: FF byte before gold read epilog (hook at +1)
+        // Pattern: FF 8B 40 4C 48 83 C4 28
+        {
+            const uint8_t pat[] = { 0xFF, 0x8B, 0x40, 0x4C, 0x48, 0x83, 0xC4, 0x28 };
+            addrGold = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxx");
         }
     }
 
@@ -553,6 +572,7 @@ public:
 
     void EnablePetFriend() {
         if (hookPetFriend.active || !addrPetFriend) return;
+        if (hookAnimalStats.active) RemoveHook(m_hProc, hookAnimalStats);
         // Trampoline: set pet's friendship int (offset 4C in friendship object at rcx+450)
         //             to 1000 (max), then execute original prolog push rbp/r15/r14.
         uint8_t shell[] = {
@@ -579,14 +599,50 @@ public:
             0x8B, 0x40, 0x4C,              // mov eax,[rax+4C]  (orig 0..2)
             0x85, 0xC0                      // test eax,eax      (orig 3..4)
         };
-        // Return to addrStackables+6: skips the patched jle byte at +5.
-        InstallHook(m_hProc, hookStackables, addrStackables, 6, shell, sizeof(shell), addrStackables + 6);
+        // Patch 5 bytes (mov eax + test eax); jle at +5 executes natively after return.
+        InstallHook(m_hProc, hookStackables, addrStackables, 5, shell, sizeof(shell), addrStackables + 5);
+    }
+
+    void EnableAnimalStats() {
+        if (hookAnimalStats.active || !addrPetFriend) return;
+        if (hookPetFriend.active) RemoveHook(m_hProc, hookPetFriend);
+        // Set fullness [rcx+190], happiness [rcx+1D0], friendliness [rcx+1C8] to 9999,
+        // then execute original prolog: push rbp/r15/r14
+        uint8_t shell[] = {
+            0x48, 0x8B, 0x81, 0x90, 0x01, 0x00, 0x00,    // mov rax,[rcx+190]
+            0x48, 0x85, 0xC0,                              // test rax,rax
+            0x74, 0x07,                                    // je +7
+            0xC7, 0x40, 0x4C, 0x0F, 0x27, 0x00, 0x00,    // mov dword [rax+4C],9999
+            0x48, 0x8B, 0x81, 0xD0, 0x01, 0x00, 0x00,    // mov rax,[rcx+1D0]
+            0x48, 0x85, 0xC0,                              // test rax,rax
+            0x74, 0x07,                                    // je +7
+            0xC7, 0x40, 0x4C, 0x0F, 0x27, 0x00, 0x00,    // mov dword [rax+4C],9999
+            0x48, 0x8B, 0x81, 0xC8, 0x01, 0x00, 0x00,    // mov rax,[rcx+1C8]
+            0x48, 0x85, 0xC0,                              // test rax,rax
+            0x74, 0x07,                                    // je +7
+            0xC7, 0x40, 0x4C, 0x0F, 0x27, 0x00, 0x00,    // mov dword [rax+4C],9999
+            0x55,                                          // push rbp  (orig 0)
+            0x41, 0x57,                                    // push r15  (orig 1..2)
+            0x41, 0x56                                     // push r14  (orig 3..4)
+        };
+        InstallHook(m_hProc, hookAnimalStats, addrPetFriend, 5, shell, sizeof(shell), addrPetFriend + 5);
+    }
+
+    void EnableGold() {
+        if (hookGold.active || !addrGold) return;
+        // Hook at addrGold+1; set gold to 999,999,999 then execute original: mov eax,[rax+4C]; add rsp,28
+        uint8_t shell[] = {
+            0xC7, 0x40, 0x4C, 0xFF, 0xC9, 0x9A, 0x3B,    // mov dword [rax+4C],999999999
+            0x8B, 0x40, 0x4C,                              // mov eax,[rax+4C]  (original)
+            0x48, 0x83, 0xC4, 0x28                         // add rsp,28        (original)
+        };
+        InstallHook(m_hProc, hookGold, addrGold + 1, 7, shell, sizeof(shell), addrGold + 8);
     }
 
     // ------------------------------------------------------------------ loop
 
     void Loop() {
-        bool prev[15] = {};
+        bool prev[17] = {};
 
         while (m_running.load()) {
             int idx = 0;
@@ -619,7 +675,9 @@ public:
                 else if (!strcmp(id, "instant_crop_growth"))en ? EnableCropGrowth(): RemoveHook(m_hProc, hookCropGrowth);
                 else if (!strcmp(id, "max_friendship"))     en ? EnableFriendship(): RemoveHook(m_hProc, hookFriendship);
                 else if (!strcmp(id, "max_pet_friendship")) en ? EnablePetFriend() : RemoveHook(m_hProc, hookPetFriend);
-                else if (!strcmp(id, "stackables_999"))     en ? EnableStackables(): RemoveHook(m_hProc, hookStackables);
+                else if (!strcmp(id, "stackables_999"))     en ? EnableStackables() : RemoveHook(m_hProc, hookStackables);
+                else if (!strcmp(id, "max_animal_stats"))   en ? EnableAnimalStats() : RemoveHook(m_hProc, hookAnimalStats);
+                else if (!strcmp(id, "set_gold"))           en ? EnableGold()       : RemoveHook(m_hProc, hookGold);
 
                 idx++;
             }
@@ -650,6 +708,8 @@ public:
         RemoveHook(m_hProc, hookFriendship);
         RemoveHook(m_hProc, hookPetFriend);
         RemoveHook(m_hProc, hookStackables);
+        RemoveHook(m_hProc, hookAnimalStats);
+        RemoveHook(m_hProc, hookGold);
 
         if (m_hProc) { CloseHandle(m_hProc); m_hProc = nullptr; }
     }
