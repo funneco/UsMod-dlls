@@ -45,7 +45,7 @@
           "release_tag": "StardewValley-1.6.x-1.0.0",
           "repo": "funneco/UsMod-dlls",
           "dll_filename": "trainer.dll",
-          "sha256": "bce3fd15a7a2ca12dd19c822ce47ea3f3007d498ff102f71ad2c9e68de0d33d4",
+          "sha256": "c6b47cafec2bb1e3eede89bfa7af2e2db7596209eb9e2a00c46fd9670c440c37",
           "version_constraint": {
             "type": "exact",
             "builds": [
