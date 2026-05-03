@@ -54,21 +54,37 @@ static bool MemRead(HANDLE hProc, uintptr_t addr, void* data, size_t size) {
     return ReadProcessMemory(hProc, (LPCVOID)addr, data, size, &r) && r == size;
 }
 
-// mask: 'x' = match exact byte, '?' = wildcard
-static uintptr_t AobScan(HANDLE hProc, uintptr_t start, uintptr_t end,
-                          const uint8_t* pattern, const char* mask) {
+// Walk all committed readable/executable regions — required for JIT games (Mono/.NET)
+// where code lives in anonymous heap pages, not the EXE image.
+static uintptr_t AobScan(HANDLE hProc, const uint8_t* pattern, const char* mask) {
     size_t patLen = strlen(mask);
-    std::vector<uint8_t> chunk(0x10000);
-    for (uintptr_t addr = start; addr < end; addr += chunk.size() - patLen) {
-        SIZE_T read = 0;
-        ReadProcessMemory(hProc, (LPCVOID)addr, chunk.data(), chunk.size(), &read);
-        if (!read) continue;
-        for (size_t i = 0; i + patLen <= read; i++) {
-            bool found = true;
-            for (size_t j = 0; j < patLen; j++)
-                if (mask[j] == 'x' && chunk[i + j] != pattern[j]) { found = false; break; }
-            if (found) return addr + i;
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    MEMORY_BASIC_INFORMATION mbi;
+    std::vector<uint8_t> buf;
+
+    for (uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;
+         addr < (uintptr_t)si.lpMaximumApplicationAddress; ) {
+        if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi))) break;
+
+        if (mbi.State == MEM_COMMIT &&
+            !(mbi.Protect & PAGE_GUARD) &&
+            !(mbi.Protect & PAGE_NOACCESS) &&
+            mbi.RegionSize > 0) {
+            buf.resize(mbi.RegionSize);
+            SIZE_T read = 0;
+            ReadProcessMemory(hProc, mbi.BaseAddress, buf.data(), mbi.RegionSize, &read);
+            for (size_t i = 0; i + patLen <= read; i++) {
+                bool found = true;
+                for (size_t j = 0; j < patLen; j++)
+                    if (mask[j] == 'x' && buf[i + j] != pattern[j]) { found = false; break; }
+                if (found) return (uintptr_t)mbi.BaseAddress + i;
+            }
         }
+
+        uintptr_t next = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= addr) break;
+        addr = next;
     }
     return 0;
 }
@@ -211,7 +227,6 @@ public:
     HANDLE             m_hProc  = nullptr;
     DWORD              m_pid    = 0;
     uintptr_t          m_base   = 0;
-    uintptr_t          m_scanEnd= 0;
     std::atomic<bool>  m_running{ false };
     std::thread        m_thread;
     std::list<Feature> m_features;
@@ -257,7 +272,6 @@ public:
         for (auto e : exes) { m_base = GetModuleBase(m_pid, e); if (m_base) break; }
         if (!m_base) { CloseHandle(m_hProc); m_hProc = nullptr; return false; }
 
-        m_scanEnd = m_base + 0x5000000;
         ScanAll();
 
         m_running.store(true);
@@ -272,7 +286,7 @@ public:
         // aobscan: 0F B6 8E 4E 07 00 00
         {
             const uint8_t pat[] = { 0x0F, 0xB6, 0x8E, 0x4E, 0x07, 0x00, 0x00 };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxx");
+            uintptr_t a = AobScan(m_hProc, pat, "xxxxxxx");
             if (a) {
                 pNoclip.addr = a;
                 pNoclip.sz   = 7;
@@ -287,7 +301,7 @@ public:
         {
             const uint8_t pat[] = { 0xC5, 0xFA, 0x2A, 0x81, 0xEC, 0x06, 0x00, 0x00,
                                     0xC5, 0xF0, 0x57, 0xC9, 0xC5, 0xF2, 0x2A, 0xCA };
-            hookHealth.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxx");
+            hookHealth.addr = AobScan(m_hProc, pat, "xxxxxxxxxxxxxxxx");
             if (hookHealth.addr) {
                 const uint8_t shell[] = {
                     0xDB, 0x81, 0xF0, 0x06, 0x00, 0x00,              // fild dword [rcx+6F0]  (maxHealth)
@@ -303,7 +317,7 @@ public:
         {
             const uint8_t pat[] = { 0x48, 0x8B, 0x09, 0x48, 0x8B, 0x89, 0xD0, 0x04, 0x00, 0x00,
                                     0xC5, 0x7A, 0x10, 0x49, 0x4C };
-            hookStamina.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxx");
+            hookStamina.addr = AobScan(m_hProc, pat, "xxxxxxxxxxxxxxx");
             if (hookStamina.addr) {
                 const uint8_t shell[] = {
                     0x48, 0x8B, 0x09,                              // mov rcx,[rcx]      (orig 0..2)
@@ -323,7 +337,7 @@ public:
                 0xC5, 0xF8, 0x29, 0x74, 0x24, 0x50, 0xC5, 0xF8, 0x29,
                 0x7C, 0x24, 0x40, 0x48, 0x8B, 0xF1, 0x48, 0x8B, 0x8E,
                 0x20, 0x05, 0x00, 0x00, 0x80, 0x79, 0x4D, 0x00 };
-            hookSpeed.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+            hookSpeed.addr = AobScan(m_hProc, pat, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
             if (hookSpeed.addr) {
                 const uint8_t shell[] = {
                     0x48, 0x83, 0xEC, 0x08,                       // sub rsp,8
@@ -340,7 +354,7 @@ public:
         // aobscan: 8D 68 FF 48 8B CF
         {
             const uint8_t pat[] = { 0x8D, 0x68, 0xFF, 0x48, 0x8B, 0xCF };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxx");
+            uintptr_t a = AobScan(m_hProc, pat, "xxxxxx");
             if (a) {
                 pItems.addr    = a + 2;
                 pItems.sz      = 1;
@@ -354,7 +368,7 @@ public:
         {
             const uint8_t pat[] = { 0x4C, 0x8B, 0x86, 0x08, 0x01, 0x00, 0x00,
                                     0x45, 0x8B, 0x40, 0x4C };
-            hookWater.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxx");
+            hookWater.addr = AobScan(m_hProc, pat, "xxxxxxxxxxx");
             if (hookWater.addr) {
                 const uint8_t shell[] = {
                     0x4C, 0x8B, 0x86, 0x08, 0x01, 0x00, 0x00,        // mov r8,[rsi+108] (original)
@@ -372,7 +386,7 @@ public:
             const uint8_t pat[] = { 0x83, 0x05, 0x00, 0x00, 0x00, 0x00, 0x0A,
                                     0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
                                     0xBA, 0x1F, 0x85, 0xEB, 0x51 };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xx????x?????xxxxxx");
+            uintptr_t a = AobScan(m_hProc, pat, "xx????x?????xxxxxx");
             if (a) {
                 pFreezeTime.addr    = a + 6;
                 pFreezeTime.sz      = 1;
@@ -388,7 +402,7 @@ public:
                 0xC5, 0xF8, 0x28, 0xC6, 0xC5, 0xF8, 0x28, 0x74, 0x24, 0x20,
                 0x48, 0x83, 0xC4, 0x38, 0x5B, 0x5D, 0x5E, 0x5F,
                 0x41, 0x5C, 0x41, 0x5D, 0x41, 0x5E, 0x41, 0x5F, 0xC3 };
-            hookFishBite.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxxxxxxxxxxxxx");
+            hookFishBite.addr = AobScan(m_hProc, pat, "xxxxxxxxxxxxxxxxxxxxxxxxxxx");
             if (hookFishBite.addr) {
                 const uint8_t shell[] = {
                     0x0F, 0x57, 0xF6,                              // xorps xmm6,xmm6
@@ -404,7 +418,7 @@ public:
         {
             const uint8_t pat[] = { 0xF3, 0x0F, 0x11, 0x81, 0xE8, 0x00, 0x00, 0x00,
                                     0xF3, 0x0F, 0x10, 0x89 };
-            hookFishCatch.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxx");
+            hookFishCatch.addr = AobScan(m_hProc, pat, "xxxxxxxxxxxx");
             if (hookFishCatch.addr) {
                 const uint8_t shell[] = {
                     0xC7, 0x81, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F  // mov dword [rcx+E8],0x3F800000 (1.0f)
@@ -419,7 +433,7 @@ public:
             const uint8_t pat[] = { 0xC5, 0xFA, 0x10, 0x49, 0x4C,
                                     0xC4, 0xC1, 0x72, 0x5C, 0xC8,
                                     0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x60 };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxxxxxx");
+            uintptr_t a = AobScan(m_hProc, pat, "xxxxxxxxxxxxxxxxx");
             if (a) {
                 pTrees.addr = a;
                 pTrees.sz   = 5;
@@ -435,7 +449,7 @@ public:
         {
             const uint8_t pat[] = { 0x8B, 0x50, 0x38, 0x2B, 0x50, 0x40,
                                     0x8D, 0x04, 0xD2, 0x44, 0x8D, 0x2C, 0x81 };
-            hookFreeCraft.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxxxxx");
+            hookFreeCraft.addr = AobScan(m_hProc, pat, "xxxxxxxxxxxxx");
             if (hookFreeCraft.addr) {
                 const uint8_t shell[] = {
                     0xC7, 0x40, 0x38, 0x00, 0x00, 0x00, 0x00,  // mov dword [rax+38],0
@@ -450,7 +464,7 @@ public:
         // aobscan: 48 8B 4E 28 8B 49 4C 48
         {
             const uint8_t pat[] = { 0x48, 0x8B, 0x4E, 0x28, 0x8B, 0x49, 0x4C, 0x48 };
-            hookCropGrowth.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxx");
+            hookCropGrowth.addr = AobScan(m_hProc, pat, "xxxxxxxx");
             if (hookCropGrowth.addr) {
                 const uint8_t shell[] = {
                     0x48, 0x8B, 0x4E, 0x28,  // mov rcx,[rsi+28]  (orig 0..3)
@@ -471,7 +485,7 @@ public:
         // aobscan: 41 56 57 56 55 53 48
         {
             const uint8_t pat[] = { 0x41, 0x56, 0x57, 0x56, 0x55, 0x53, 0x48 };
-            hookFriendship.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxx");
+            hookFriendship.addr = AobScan(m_hProc, pat, "xxxxxxx");
             if (hookFriendship.addr) {
                 const uint8_t shell[] = {
                     0xBA, 0x7F, 0x96, 0x98, 0x00,  // mov edx,9999999
@@ -488,7 +502,7 @@ public:
         // aobscan: 55 41 57 41 56 41 55 41 54 57
         {
             const uint8_t pat[] = { 0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x57 };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxxxx");
+            uintptr_t a = AobScan(m_hProc, pat, "xxxxxxxxxx");
             if (a) {
                 hookPetFriend.addr  = a;
                 hookAnimalStats.addr = a;
@@ -535,7 +549,7 @@ public:
         // aobscan: 8B 40 4C 85 C0 7E
         {
             const uint8_t pat[] = { 0x8B, 0x40, 0x4C, 0x85, 0xC0, 0x7E };
-            hookStackables.addr = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxx");
+            hookStackables.addr = AobScan(m_hProc, pat, "xxxxxx");
             if (hookStackables.addr) {
                 const uint8_t shell[] = {
                     0x53,                           // push rbx
@@ -553,7 +567,7 @@ public:
         // aobscan: FF 8B 40 4C 48 83 C4 28
         {
             const uint8_t pat[] = { 0xFF, 0x8B, 0x40, 0x4C, 0x48, 0x83, 0xC4, 0x28 };
-            uintptr_t a = AobScan(m_hProc, m_base, m_scanEnd, pat, "xxxxxxxx");
+            uintptr_t a = AobScan(m_hProc, pat, "xxxxxxxx");
             if (a) {
                 hookGold.addr = a + 1;
                 const uint8_t shell[] = {
