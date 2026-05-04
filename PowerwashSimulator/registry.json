@@ -1,0 +1,31 @@
+{
+  "game_id": "1290000",
+  "game_name": "PowerwashSimulator",
+  "trainer_version": "1.0.0",
+  "release_tag": "PowerwashSimulator-1.0.1f-1.0.0",
+  "repo": "funneco/UsMod-dlls",
+  "dll_filename": "trainer.dll",
+  "sha256": "4f72381e3207a757a500c56fc6a1f6ef132b1f7937e24d4ef4305458074dbab6",
+  "version_constraint": {
+    "type": "exact",
+    "builds": [
+      "20240979"
+    ]
+  },
+  "features": [
+    {
+      "id": "instant_clean",
+      "name": "Instant Clean",
+      "description": "10k Power",
+      "is_toggle": true,
+      "default_vk": 112
+    },
+    {
+      "id": "show_dirt",
+      "name": "Show Dirt",
+      "description": "Permanent Highlight",
+      "is_toggle": true,
+      "default_vk": 114
+    }
+  ]
+}

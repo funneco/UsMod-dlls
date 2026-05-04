@@ -1,0 +1,136 @@
+{
+  "game_id": "413150",
+  "game_name": "StardewValley",
+  "trainer_version": "1.0.0",
+  "release_tag": "StardewValley-1.6.x-1.0.0",
+  "repo": "funneco/UsMod-dlls",
+  "dll_filename": "trainer.dll",
+  "sha256": "c6b47cafec2bb1e3eede89bfa7af2e2db7596209eb9e2a00c46fd9670c440c37",
+  "version_constraint": {
+    "type": "exact",
+    "builds": [
+      "16826371"
+    ]
+  },
+  "features": [
+    {
+      "id": "noclip",
+      "name": "No Clip",
+      "description": "Walk through walls",
+      "is_toggle": true,
+      "default_vk": 112
+    },
+    {
+      "id": "unlimited_health",
+      "name": "Unlimited Health",
+      "description": "Health resets to max",
+      "is_toggle": true,
+      "default_vk": 113
+    },
+    {
+      "id": "unlimited_stamina",
+      "name": "Unlimited Stamina",
+      "description": "Stamina resets to max",
+      "is_toggle": true,
+      "default_vk": 114
+    },
+    {
+      "id": "super_speed",
+      "name": "Super Speed",
+      "description": "Move 10x faster",
+      "is_toggle": true,
+      "default_vk": 115
+    },
+    {
+      "id": "unlimited_items",
+      "name": "Unlimited Items",
+      "description": "Items don't decrease",
+      "is_toggle": true,
+      "default_vk": 116
+    },
+    {
+      "id": "unlimited_water",
+      "name": "Unlimited Water",
+      "description": "Watering can never empties",
+      "is_toggle": true,
+      "default_vk": 117
+    },
+    {
+      "id": "freeze_time",
+      "name": "Freeze Game Time",
+      "description": "Time stops",
+      "is_toggle": true,
+      "default_vk": 118
+    },
+    {
+      "id": "instant_fish_bite",
+      "name": "Instant Fish Bite",
+      "description": "Fish bite immediately",
+      "is_toggle": true,
+      "default_vk": 119
+    },
+    {
+      "id": "easy_fish_catch",
+      "name": "Easy Fish Catch",
+      "description": "Catch bar fills instantly",
+      "is_toggle": true,
+      "default_vk": 120
+    },
+    {
+      "id": "one_hit_trees",
+      "name": "One Hit Trees",
+      "description": "Trees fall in one hit",
+      "is_toggle": true,
+      "default_vk": 121
+    },
+    {
+      "id": "free_crafting",
+      "name": "Free Crafting",
+      "description": "Craft without resources",
+      "is_toggle": true,
+      "default_vk": 122
+    },
+    {
+      "id": "instant_crop_growth",
+      "name": "Instant Crop Growth",
+      "description": "Crops skip to last stage",
+      "is_toggle": true,
+      "default_vk": 123
+    },
+    {
+      "id": "max_friendship",
+      "name": "Max Friendship",
+      "description": "Max friendship when talking",
+      "is_toggle": true,
+      "default_vk": 97
+    },
+    {
+      "id": "max_pet_friendship",
+      "name": "Max Pet Friendship",
+      "description": "Pet friendship set to 1000",
+      "is_toggle": true,
+      "default_vk": 98
+    },
+    {
+      "id": "stackables_999",
+      "name": "Stackables to 999",
+      "description": "Stack size reported as 999",
+      "is_toggle": true,
+      "default_vk": 99
+    },
+    {
+      "id": "max_animal_stats",
+      "name": "Max Animal Stats",
+      "description": "Animals always full/happy/friendly",
+      "is_toggle": true,
+      "default_vk": 100
+    },
+    {
+      "id": "set_gold",
+      "name": "Set Max Gold",
+      "description": "Gold set to 999,999,999",
+      "is_toggle": true,
+      "default_vk": 101
+    }
+  ]
+}

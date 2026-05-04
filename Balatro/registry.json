@@ -1,0 +1,31 @@
+{
+  "game_id": "2379780",
+  "game_name": "Balatro",
+  "trainer_version": "1.0.0",
+  "release_tag": "Balatro-1.0.1f-1.0.0",
+  "repo": "funneco/UsMod-dlls",
+  "dll_filename": "trainer.dll",
+  "sha256": "a82aba20fcb6550742555487fc109eda8197bfd6eca107cc3d4ec5809d26ca77",
+  "version_constraint": {
+    "type": "exact",
+    "builds": [
+      "17459173"
+    ]
+  },
+  "features": [
+    {
+      "id": "add_gold",
+      "name": "Add Gold",
+      "description": "Set gold to 9999",
+      "is_toggle": false,
+      "default_vk": 112
+    },
+    {
+      "id": "add_secondary",
+      "name": "Add Secondary",
+      "description": "Set secondary to 99",
+      "is_toggle": false,
+      "default_vk": 113
+    }
+  ]
+}

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UsMod Registry Editor</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#141414;color:#ddd;font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;padding:20px}
+h1{font-size:1.3rem;color:#fff;margin-bottom:16px;letter-spacing:.5px}
+h2{font-size:.85rem;text-transform:uppercase;letter-spacing:1px;color:#777;margin-bottom:12px}
+.card{background:#1e1e1e;border:1px solid #2e2e2e;border-radius:6px;padding:16px;margin-bottom:14px}
+.grid{display:grid;gap:10px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:1fr 1fr 1fr}
+.g4{grid-template-columns:1fr 1fr 1fr 1fr}
+.span2{grid-column:span 2}
+.span4{grid-column:1/-1}
+label{display:flex;flex-direction:column;gap:4px;color:#888;font-size:.8rem}
+input,select{background:#111;border:1px solid #333;border-radius:4px;color:#e0e0e0;padding:5px 8px;font-size:.88rem;width:100%;transition:border .15s}
+input:focus,select:focus{outline:none;border-color:#3a7bd5}
+input[readonly]{color:#4a9eff;background:#111;cursor:default}
+button{cursor:pointer;border:none;border-radius:4px;padding:7px 14px;font-size:.88rem;transition:background .15s}
+.btn{background:#2a2a2a;color:#ccc}.btn:hover{background:#333}
+.btn-primary{background:#1a5cbf;color:#fff}.btn-primary:hover{background:#2266d0}
+.btn-sm{padding:3px 8px;font-size:.75rem}
+.btn-danger{background:#8b1a0a;color:#f99}.btn-danger:hover{background:#aa2211}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+input[type="file"]{display:none}
+table{width:100%;border-collapse:collapse;margin-top:4px}
+thead th{text-align:left;padding:6px 8px;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #2a2a2a}
+tbody td{padding:3px 6px;border-bottom:1px solid #1a1a1a;vertical-align:middle}
+tbody td input{background:#111;border-color:#2a2a2a;padding:4px 6px}
+tbody td input:focus{border-color:#3a7bd5}
+.vk-wrap{display:flex;flex-direction:column;gap:2px}
+.custom-vk{display:none}
+#status{font-size:.8rem;color:#666}
+.feat-toggle{width:18px;height:18px;cursor:pointer;accent-color:#3a7bd5}
+.section-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.tag-preview{font-family:monospace;font-size:.82rem;color:#4a9eff}
+.vc-fields{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:flex-end}
+.vc-fields label{flex:1;min-width:120px}
+hr{border:none;border-top:1px solid #2a2a2a;margin:12px 0}
+.hint{font-size:.75rem;color:#555;margin-top:6px}
+</style>
+</head>
+<body>
+
+<h1>UsMod Registry Editor</h1>
+
+<!-- Toolbar -->
+<div class="card">
+  <div class="actions">
+    <input type="file" id="inp-cpp" accept=".cpp,.h">
+    <button class="btn" onclick="document.getElementById('inp-cpp').click()">Load .cpp</button>
+    <input type="file" id="inp-reg" accept=".json">
+    <button class="btn" onclick="document.getElementById('inp-reg').click()">Load registry.json</button>
+    <button class="btn-primary" onclick="doExport()">Export registry.json</button>
+    <span id="status"></span>
+  </div>
+</div>
+
+<!-- Metadata -->
+<div class="card">
+  <h2>Game Metadata</h2>
+  <div class="grid g4">
+    <label>Game ID<input id="f-game_id" placeholder="e.g. 1290000"></label>
+    <label>Game Name<input id="f-game_name" placeholder="e.g. PowerwashSimulator" oninput="refreshTag()"></label>
+    <label>Game Version<input id="f-game_version" placeholder="e.g. 1.0.1f" oninput="refreshTag()"></label>
+    <label>Trainer Version<input id="f-trainer_version" placeholder="e.g. 1.0.0" oninput="refreshTag()"></label>
+    <label class="span4">SHA256<input id="f-sha256" placeholder="(leave blank until DLL is built)"></label>
+    <label class="span4">Release Tag<input id="f-release_tag" readonly class="tag-preview"></label>
+  </div>
+
+  <hr>
+  <h2>Version Constraint</h2>
+  <div>
+    <label style="max-width:160px">Type
+      <select id="f-vc_type" onchange="vcTypeChange()">
+        <option value="exact">exact</option>
+        <option value="range">range</option>
+      </select>
+    </label>
+    <div class="vc-fields" id="vc-exact">
+      <label>Build IDs <small>(comma-separated)</small>
+        <input id="f-builds" placeholder="e.g. 20240979, 20241000">
+      </label>
+    </div>
+    <div class="vc-fields" id="vc-range" style="display:none">
+      <label>Min Build<input id="f-min_build" placeholder="e.g. 14000000"></label>
+      <label>Max Build<input id="f-max_build" placeholder="e.g. 14199999"></label>
+    </div>
+  </div>
+</div>
+
+<!-- Features -->
+<div class="card">
+  <div class="section-row">
+    <h2>Features</h2>
+    <button class="btn btn-sm" onclick="addRow()">+ Add Feature</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:150px">ID</th>
+        <th style="width:160px">Name</th>
+        <th>Description</th>
+        <th style="width:60px;text-align:center">Toggle</th>
+        <th style="width:130px">Hotkey (VK)</th>
+        <th style="width:36px"></th>
+      </tr>
+    </thead>
+    <tbody id="feat-body"></tbody>
+  </table>
+  <p class="hint">Toggle = stays on/off per keypress. Non-toggle = fires once per keypress.</p>
+</div>
+
+<script>
+const VK_NAMES = {
+  0:'None', 8:'Backspace', 9:'Tab', 13:'Enter', 27:'Escape',
+  32:'Space', 33:'PgUp', 34:'PgDn', 35:'End', 36:'Home',
+  37:'Left', 38:'Up', 39:'Right', 40:'Down', 45:'Insert', 46:'Delete',
+  96:'Num0', 97:'Num1', 98:'Num2', 99:'Num3', 100:'Num4',
+  101:'Num5', 102:'Num6', 103:'Num7', 104:'Num8', 105:'Num9',
+  106:'Num*', 107:'Num+', 109:'Num-', 110:'Num.', 111:'Num/',
+  112:'F1', 113:'F2', 114:'F3', 115:'F4', 116:'F5', 117:'F6',
+  118:'F7', 119:'F8', 120:'F9', 121:'F10', 122:'F11', 123:'F12',
+};
+for (let i=65;i<=90;i++) VK_NAMES[i]=String.fromCharCode(i);
+for (let i=48;i<=57;i++) VK_NAMES[i]=String.fromCharCode(i);
+
+const COMMON_VKS = [
+  0,
+  112,113,114,115,116,117,118,119,120,121,122,123,
+  96,97,98,99,100,101,102,103,104,105,
+  106,107,109,110,111,
+  65,66,67,68,69,70,71,72,73,74,75,76,77,
+  78,79,80,81,82,83,84,85,86,87,88,89,90,
+  48,49,50,51,52,53,54,55,56,57,
+  32,13,9,8,27,45,46,33,34,35,36,37,38,39,40,
+];
+const COMMON_VK_SET = new Set(COMMON_VKS);
+
+const VK_CPP = {
+  VK_F1:112,VK_F2:113,VK_F3:114,VK_F4:115,VK_F5:116,VK_F6:117,
+  VK_F7:118,VK_F8:119,VK_F9:120,VK_F10:121,VK_F11:122,VK_F12:123,
+  VK_NUMPAD0:96,VK_NUMPAD1:97,VK_NUMPAD2:98,VK_NUMPAD3:99,VK_NUMPAD4:100,
+  VK_NUMPAD5:101,VK_NUMPAD6:102,VK_NUMPAD7:103,VK_NUMPAD8:104,VK_NUMPAD9:105,
+  VK_SPACE:32,VK_RETURN:13,VK_TAB:9,VK_BACK:8,VK_ESCAPE:27,
+  VK_INSERT:45,VK_DELETE:46,VK_HOME:36,VK_END:35,
+  VK_PRIOR:33,VK_NEXT:34,VK_LEFT:37,VK_UP:38,VK_RIGHT:39,VK_DOWN:40,
+};
+
+function vkLabel(v){
+  const n=VK_NAMES[v];
+  return n ? `${n} (${v})` : `${v}`;
+}
+
+function makeVKSelect(val){
+  const sel=document.createElement('select');
+  for(const v of COMMON_VKS){
+    const o=document.createElement('option');
+    o.value=v; o.textContent=vkLabel(v);
+    if(v===val) o.selected=true;
+    sel.appendChild(o);
+  }
+  const cust=document.createElement('option');
+  cust.value='__custom__'; cust.textContent='Custom...';
+  if(!COMMON_VK_SET.has(val)) cust.selected=true;
+  sel.appendChild(cust);
+  sel.addEventListener('change',()=>{
+    const ci=sel.parentElement.querySelector('.custom-vk');
+    ci.style.display=sel.value==='__custom__'?'block':'none';
+  });
+  return sel;
+}
+
+function addRow(feat={}){
+  const tbody=document.getElementById('feat-body');
+  const tr=document.createElement('tr');
+  const vk=feat.default_vk??0;
+  const isCustom=!COMMON_VK_SET.has(vk);
+
+  const td=(content,style='')=>{
+    const d=document.createElement('td');
+    if(style) d.style.cssText=style;
+    if(typeof content==='string') d.innerHTML=content;
+    else d.appendChild(content);
+    return d;
+  };
+
+  const inp=(val,ph)=>{
+    const i=document.createElement('input');
+    i.type='text'; i.value=val??''; i.placeholder=ph??'';
+    return i;
+  };
+
+  const chk=document.createElement('input');
+  chk.type='checkbox'; chk.className='feat-toggle';
+  chk.checked=!!feat.is_toggle;
+
+  const vkWrap=document.createElement('div');
+  vkWrap.className='vk-wrap';
+  const sel=makeVKSelect(vk);
+  const custIn=document.createElement('input');
+  custIn.type='number'; custIn.className='custom-vk';
+  custIn.placeholder='VK code'; custIn.value=vk;
+  custIn.style.display=isCustom?'block':'none';
+  vkWrap.append(sel,custIn);
+
+  const delBtn=document.createElement('button');
+  delBtn.className='btn btn-sm btn-danger'; delBtn.textContent='✕';
+  delBtn.onclick=()=>tr.remove();
+
+  const idInp=inp(feat.id,'feature_id');
+  const nameInp=inp(feat.name,'Feature Name');
+  const descInp=inp(feat.description,'What it does');
+
+  tr.dataset.row='1';
+  tr.append(
+    td(idInp),
+    td(nameInp),
+    td(descInp),
+    td(chk,'text-align:center'),
+    td(vkWrap),
+    td(delBtn),
+  );
+  // Store refs
+  tr._id=idInp; tr._name=nameInp; tr._desc=descInp; tr._toggle=chk;
+  tr._vkSel=sel; tr._vkCustom=custIn;
+  tbody.appendChild(tr);
+}
+
+function getFeatures(){
+  return [...document.querySelectorAll('#feat-body tr[data-row]')].map(tr=>{
+    let vk;
+    if(tr._vkSel.value==='__custom__') vk=parseInt(tr._vkCustom.value)||0;
+    else vk=parseInt(tr._vkSel.value);
+    return {
+      id:tr._id.value.trim(),
+      name:tr._name.value.trim(),
+      description:tr._desc.value.trim(),
+      is_toggle:tr._toggle.checked,
+      default_vk:vk,
+    };
+  });
+}
+
+function refreshTag(){
+  const n=v('f-game_name'),gv=v('f-game_version'),tv=v('f-trainer_version');
+  document.getElementById('f-release_tag').value=`${n}-${gv}-${tv}`;
+}
+
+function v(id){return document.getElementById(id).value.trim();}
+function sv(id,val){document.getElementById(id).value=val??'';}
+
+function vcTypeChange(){
+  const t=v('f-vc_type');
+  document.getElementById('vc-exact').style.display=t==='exact'?'flex':'none';
+  document.getElementById('vc-range').style.display=t==='range'?'flex':'none';
+}
+
+function setStatus(msg,color='#4a8a5a'){
+  const s=document.getElementById('status');
+  s.textContent=msg; s.style.color=color;
+}
+
+function parseCpp(text){
+  const re=/m_features\.emplace_back\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(\d+)\s*,\s*([^)]+?)\s*\)/g;
+  const feats=[];
+  let m;
+  while((m=re.exec(text))!==null){
+    const [,id,name,desc,tog,vkRaw]=m;
+    const vkStr=vkRaw.trim();
+    let vk=VK_CPP[vkStr]??parseInt(vkStr);
+    if(isNaN(vk)) vk=0;
+    feats.push({id,name,description:desc,is_toggle:tog==='1',default_vk:vk});
+  }
+  return feats;
+}
+
+function fillFromEntry(data){
+  sv('f-game_id',data.game_id);
+  sv('f-game_name',data.game_name);
+  sv('f-trainer_version',data.trainer_version);
+  sv('f-sha256',data.sha256);
+  sv('f-release_tag',data.release_tag);
+  // Try to extract game_version from release_tag
+  if(data.release_tag&&data.game_name){
+    const prefix=data.game_name+'-';
+    if(data.release_tag.startsWith(prefix)){
+      const rest=data.release_tag.slice(prefix.length);
+      const gv=rest.slice(0,rest.lastIndexOf('-'));
+      sv('f-game_version',gv);
+    }
+  }
+  const vc=data.version_constraint;
+  if(vc){
+    sv('f-vc_type',vc.type);
+    vcTypeChange();
+    if(vc.type==='exact'&&vc.builds) sv('f-builds',(vc.builds||[]).join(', '));
+    if(vc.type==='range'){sv('f-min_build',vc.min_build);sv('f-max_build',vc.max_build);}
+  }
+  document.getElementById('feat-body').innerHTML='';
+  for(const f of data.features||[]) addRow(f);
+}
+
+function doExport(){
+  const type=v('f-vc_type');
+  let vc;
+  if(type==='exact'){
+    const builds=v('f-builds').split(',').map(s=>s.trim()).filter(Boolean);
+    vc={type:'exact',builds};
+  } else {
+    vc={type:'range',min_build:v('f-min_build'),max_build:v('f-max_build')};
+  }
+  const out={
+    game_id:v('f-game_id'),
+    game_name:v('f-game_name'),
+    trainer_version:v('f-trainer_version'),
+    release_tag:v('f-release_tag'),
+    repo:'funneco/UsMod-dlls',
+    dll_filename:'trainer.dll',
+    sha256:v('f-sha256'),
+    version_constraint:vc,
+    features:getFeatures(),
+  };
+  const blob=new Blob([JSON.stringify(out,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`${out.game_name||'game'}_registry.json`;
+  a.click();
+  setStatus(`Exported ${a.download} (${out.features.length} features)`);
+}
+
+document.getElementById('inp-cpp').addEventListener('change',e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    const feats=parseCpp(ev.target.result);
+    document.getElementById('feat-body').innerHTML='';
+    for(const f of feats) addRow(f);
+    setStatus(`Parsed ${feats.length} features from ${file.name}`);
+  };
+  r.readAsText(file);
+  e.target.value='';
+});
+
+document.getElementById('inp-reg').addEventListener('change',e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    try{
+      const data=JSON.parse(ev.target.result);
+      fillFromEntry(data);
+      setStatus(`Loaded ${file.name}`);
+    } catch(err){
+      setStatus(`JSON error: ${err.message}`,'#cc4433');
+    }
+  };
+  r.readAsText(file);
+  e.target.value='';
+});
+</script>
+</body>
+</html>

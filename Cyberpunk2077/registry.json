@@ -1,0 +1,23 @@
+{
+  "game_id": "1091500",
+  "game_name": "Cyberpunk2077",
+  "trainer_version": "1.0.0",
+  "release_tag": "Cyberpunk2077-2.12-1.0.0",
+  "repo": "funneco/UsMod-dlls",
+  "dll_filename": "trainer.dll",
+  "sha256": "",
+  "version_constraint": {
+    "type": "range",
+    "min_build": "14000000",
+    "max_build": "14199999"
+  },
+  "features": [
+    {
+      "id": "godmode",
+      "name": "God Mode",
+      "description": "Zero incoming damage",
+      "is_toggle": true,
+      "default_vk": 112
+    }
+  ]
+}
