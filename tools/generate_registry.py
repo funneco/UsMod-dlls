@@ -109,11 +109,16 @@ def main():
 
         # Preserve existing sha256 from the per-game registry.json if present;
         # it will be filled in properly by the CI pipeline after a build.
+        # Reject placeholder values like "null", "", or anything not a 64-char hex string.
         sha256 = ""
         if os.path.exists(per_game_path):
             existing = load_json(per_game_path)
-            # Flat per-game format: sha256 sits at the top level
-            sha256 = existing.get("sha256", "")
+            candidate = existing.get("sha256", "") or ""
+            if (
+                len(candidate) == 64
+                and all(c in "0123456789abcdefABCDEF" for c in candidate)
+            ):
+                sha256 = candidate.lower()
 
         entry = {
             "game_id":            game_id,

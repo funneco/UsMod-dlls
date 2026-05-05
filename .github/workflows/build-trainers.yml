@@ -167,7 +167,7 @@ jobs:
       - name: Save SHA256 artifact
         if: steps.check.outputs.skip != 'true'
         shell: bash
-        run: printf '%s' '${{ steps.hash.outputs.sha256 }}' > '${{ matrix.game }}.sha256'
+        run: printf '%s' "${{ steps.hash.outputs.sha256 }}" > "${{ matrix.game }}.sha256"
 
       - name: Upload SHA256 artifact
         if: steps.check.outputs.skip != 'true'
@@ -261,8 +261,9 @@ jobs:
               with open(sha_file) as f:
                   sha256 = f.read().strip()
 
-              if not sha256 or len(sha256) != 64:
-                  print(f"Warning: invalid sha256 for {game_dir}: '{sha256}'")
+              print(f"  sha256 raw value : '{sha256}' (len={len(sha256)})")
+              if not sha256 or len(sha256) != 64 or not all(c in '0123456789abcdef' for c in sha256):
+                  print(f"Warning: invalid sha256 for {game_dir}: '{sha256}' — skipping")
                   continue
 
               # Per-game registry.json is a flat object — just update sha256 in place
