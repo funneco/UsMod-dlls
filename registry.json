@@ -30,6 +30,11 @@
       "game_id": "1730700",
       "game_name": "WeLoveKatamariREROLL",
       "registry": "WeLoveKatamariREROLL/registry.json"
+    },
+    {
+      "game_id": "3164500",
+      "game_name": "ScheduleOne",
+      "registry": "ScheduleOne/registry.json"
     }
   ]
 }

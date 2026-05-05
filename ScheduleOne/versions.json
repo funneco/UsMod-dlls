@@ -1,0 +1,10 @@
+{
+  "game_id": "3164500",
+  "game_name": "ScheduleOne",
+  "game_version": "1.0.1f",
+  "trainer_version": "1.0.0",
+  "version_constraint": {
+    "type": "exact",
+    "builds": ["22829923"]
+  }
+}

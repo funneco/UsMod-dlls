@@ -1,0 +1,31 @@
+{
+  "game_id": "3164500",
+  "game_name": "ScheduleOne",
+  "trainer_version": "1.0.0",
+  "release_tag": "ScheduleOne-1.0.1f-1.0.0",
+  "repo": "funneco/UsMod-dlls",
+  "dll_filename": "trainer.dll",
+  "sha256": "null",
+  "version_constraint": {
+    "type": "exact",
+    "builds": [
+      "22829923"
+    ]
+  },
+  "features": [
+    {
+      "id": "instant_clean",
+      "name": "Instant Clean",
+      "description": "10k Power",
+      "is_toggle": true,
+      "default_vk": 112
+    },
+    {
+      "id": "show_dirt",
+      "name": "Show Dirt",
+      "description": "Permanent Highlight",
+      "is_toggle": true,
+      "default_vk": 114
+    }
+  ]
+}
