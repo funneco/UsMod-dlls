@@ -4,83 +4,121 @@ on:
   push:
     branches: [main]
     paths:
-      - 'Balatro/**'
-      - 'PowerwashSimulator/**'
-      - 'GoatSimulator/**'
-      - 'StardewValley/**'
-      - 'WeLoveKatamariREROLL/**'
+      - 'registry.json'
+      - '**/CMakeLists.txt'
+      - '**/*.cpp'
+      - '**/*.h'
       - 'include/**'
   workflow_dispatch:
     inputs:
       game:
-        description: 'Game to build'
+        description: 'Game to build (game_name from registry.json, or "all")'
         required: true
         default: 'all'
-        type: choice
-        options: [all, Balatro, PowerwashSimulator, GoatSimulator, StardewValley, WeLoveKatamariREROLL]
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  detect-changes:
+  # ── 1. Read registry.json and emit the list of games ─────────────────────────
+  load-registry:
     runs-on: ubuntu-latest
     outputs:
-      balatro:       ${{ steps.filter.outputs.balatro }}
-      powerwashsimulator:     ${{ steps.filter.outputs.powerwashsimulator }}
-      goatsimulator: ${{ steps.filter.outputs.goatsimulator }}
-      stardew:       ${{ steps.filter.outputs.stardew }}
-      wlkrr:         ${{ steps.filter.outputs.wlkrr }}
+      games: ${{ steps.parse.outputs.games }}
+      paths: ${{ steps.parse.outputs.paths }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Parse registry.json
+        id: parse
+        shell: python3 {0}
+        run: |
+          import json, os
+
+          with open("registry.json") as f:
+              reg = json.load(f)
+
+          trainers = reg["trainers"]
+
+          # Matrix items: [{ "game": "Balatro" }, ...]
+          games = [{"game": t["game_name"]} for t in trainers]
+
+          # paths-filter YAML block  (one key per game)
+          paths_lines = []
+          for t in trainers:
+              name = t["game_name"]
+              key  = name.lower()
+              paths_lines.append(f"{key}:")
+              paths_lines.append(f"  - '{name}/**'")
+              paths_lines.append(f"  - 'include/**'")
+          paths_yaml = "\n".join(paths_lines)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"games={json.dumps(games)}\n")
+              # use a heredoc-style multiline output
+              out.write("paths<<PATHS_EOF\n")
+              out.write(paths_yaml + "\n")
+              out.write("PATHS_EOF\n")
+
+  # ── 2. Detect which game folders actually changed ─────────────────────────────
+  detect-changes:
+    needs: load-registry
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          filters: |
-            balatro:
-              - 'Balatro/**'
-              - 'include/**'
-            powerwashsimulator:
-              - 'PowerwashSimulator/**'
-              - 'include/**'
-            goatsimulator:
-              - 'GoatSimulator/**'
-              - 'include/**'
-            stardew:
-              - 'StardewValley/**'
-              - 'include/**'
-            wlkrr:
-              - 'WeLoveKatamariREROLL/**'
-              - 'include/**'
+          list-files: none
+          filters: ${{ needs.load-registry.outputs.paths }}
 
+  # ── 3. Build each trainer ─────────────────────────────────────────────────────
   build:
-    needs: detect-changes
+    needs: [load-registry, detect-changes]
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - game: Balatro
-            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.balatro == 'true') || github.event.inputs.game == 'Balatro' || github.event.inputs.game == 'all' }}
-          - game: PowerwashSimulator
-            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.powerwashsimulator == 'true') || github.event.inputs.game == 'PowerwashSimulator' || github.event.inputs.game == 'all' }}
-          - game: GoatSimulator
-            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.goatsimulator == 'true') || github.event.inputs.game == 'GoatSimulator' || github.event.inputs.game == 'all' }}
-          - game: StardewValley
-            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.stardew == 'true') || github.event.inputs.game == 'StardewValley' || github.event.inputs.game == 'all' }}
-          - game: WeLoveKatamariREROLL
-            should_build: ${{ (github.event_name == 'push' && needs.detect-changes.outputs.wlkrr == 'true') || github.event.inputs.game == 'WeLoveKatamariREROLL' || github.event.inputs.game == 'all' }}
+        include: ${{ fromJson(needs.load-registry.outputs.games) }}
 
     steps:
       - name: Determine if build needed
         id: check
         shell: bash
         run: |
-          if [ "${{ matrix.should_build }}" = "true" ]; then
+          GAME="${{ matrix.game }}"
+          KEY="${GAME,,}"   # lowercase
+
+          CHANGED='${{ needs.detect-changes.outputs.changed }}'
+          INPUT_GAME="${{ github.event.inputs.game }}"
+          EVENT="${{ github.event_name }}"
+
+          echo "changed list : $CHANGED"
+          echo "input.game   : $INPUT_GAME"
+          echo "event        : $EVENT"
+
+          # Check whether this game's key appears in the JSON array of changed filters
+          if python3 -c "
+          import json, sys
+          changed = json.loads(sys.argv[1])
+          key     = sys.argv[2]
+          sys.exit(0 if key in changed else 1)
+          " "$CHANGED" "$KEY"; then
+            CHANGED_FOR_GAME=true
+          else
+            CHANGED_FOR_GAME=false
+          fi
+
+          if [[ "$EVENT" == "push" && "$CHANGED_FOR_GAME" == "true" ]] \
+          || [[ "$EVENT" == "workflow_dispatch" && ( "$INPUT_GAME" == "$GAME" || "$INPUT_GAME" == "all" ) ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Skipping ${{ matrix.game }} — no relevant changes."
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "Skipping $GAME — no relevant changes."
           fi
 
       - uses: actions/checkout@v4
@@ -113,8 +151,8 @@ jobs:
         working-directory: ${{ matrix.game }}
         run: |
           $v = Get-Content "versions.json" | ConvertFrom-Json
-          "game_id=$($v.game_id)"               >> $env:GITHUB_OUTPUT
-          "game_version=$($v.game_version)"     >> $env:GITHUB_OUTPUT
+          "game_id=$($v.game_id)"                 >> $env:GITHUB_OUTPUT
+          "game_version=$($v.game_version)"       >> $env:GITHUB_OUTPUT
           "trainer_version=$($v.trainer_version)" >> $env:GITHUB_OUTPUT
 
       - name: Compute SHA256
@@ -126,7 +164,6 @@ jobs:
           "sha256=$hash" >> $env:GITHUB_OUTPUT
           Write-Host "SHA256: $hash"
 
-      # Save hash to a named file so update-registry can identify which game it belongs to
       - name: Save SHA256 artifact
         if: steps.check.outputs.skip != 'true'
         shell: bash
@@ -176,27 +213,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ── 4. Patch registry.json with the real SHA256 hashes ───────────────────────
   update-registry:
     needs: build
     runs-on: ubuntu-latest
-    # Run whenever build finishes (even if some matrix jobs were skipped),
-    # but not if the workflow itself was cancelled.
     if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Download all sha256-* artifacts into sha256s/ directory.
-      # If no builds ran (all skipped), this produces an empty directory and the
-      # Python script below exits cleanly with nothing to patch.
       - name: Download SHA256 artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: sha256-*
           merge-multiple: true
           path: sha256s/
-        continue-on-error: true  # no artifacts uploaded if all games were skipped
+        continue-on-error: true
 
       - name: Patch registry.json with real SHA256 hashes
         shell: bash
@@ -237,13 +270,11 @@ jobs:
               for trainer in reg["trainers"]:
                   if trainer["game_id"] != v["game_id"]:
                       continue
-                  # Update existing entry for this trainer_version
                   for entry in trainer["entries"]:
                       if entry["trainer_version"] == trainer_version:
                           entry["sha256"] = sha256
                           updated = True
                           break
-                  # No matching entry yet — prepend a new one
                   if not updated:
                       trainer["entries"].insert(0, {
                           "trainer_version":    trainer_version,
