@@ -231,7 +231,7 @@ jobs:
           path: sha256s/
         continue-on-error: true
 
-      - name: Patch registry.json with real SHA256 hashes
+      - name: Patch per-game registry.json files with real SHA256 hashes
         shell: bash
         run: |
           python3 - <<'PYEOF'
@@ -242,15 +242,18 @@ jobs:
               print("No SHA256 artifacts found — nothing to patch.")
               sys.exit(0)
 
-          with open("registry.json") as f:
-              reg = json.load(f)
-
           patched = []
           for sha_file in sha_files:
               game_dir = os.path.basename(sha_file).replace(".sha256", "")
+
               versions_file = f"{game_dir}/versions.json"
               if not os.path.exists(versions_file):
                   print(f"Warning: {versions_file} not found, skipping {game_dir}")
+                  continue
+
+              per_game_registry = f"{game_dir}/registry.json"
+              if not os.path.exists(per_game_registry):
+                  print(f"Warning: {per_game_registry} not found, skipping {game_dir}")
                   continue
 
               with open(versions_file) as f:
@@ -262,52 +265,32 @@ jobs:
                   print(f"Warning: invalid sha256 for {game_dir}: '{sha256}'")
                   continue
 
-              trainer_version = v["trainer_version"]
-              release_tag     = f"{v['game_name']}-{v['game_version']}-{trainer_version}"
-              repo            = os.environ.get("GITHUB_REPOSITORY", "funneco/UsMod-dlls")
+              # Per-game registry.json is a flat object — just update sha256 in place
+              with open(per_game_registry) as f:
+                  reg = json.load(f)
 
-              updated = False
-              for trainer in reg["trainers"]:
-                  if trainer["game_id"] != v["game_id"]:
-                      continue
-                  for entry in trainer["entries"]:
-                      if entry["trainer_version"] == trainer_version:
-                          entry["sha256"] = sha256
-                          updated = True
-                          break
-                  if not updated:
-                      trainer["entries"].insert(0, {
-                          "trainer_version":    trainer_version,
-                          "release_tag":        release_tag,
-                          "repo":               repo,
-                          "dll_filename":       "trainer.dll",
-                          "sha256":             sha256,
-                          "version_constraint": v["version_constraint"],
-                      })
-                      updated = True
-                  break
+              reg["sha256"]          = sha256
+              reg["trainer_version"] = v["trainer_version"]
+              reg["release_tag"]     = f"{v['game_name']}-{v['game_version']}-{v['trainer_version']}"
 
-              if updated:
-                  patched.append(game_dir)
-                  print(f"Patched {game_dir}: {sha256[:16]}...")
-              else:
-                  print(f"Warning: no registry entry found for game_id={v['game_id']} ({game_dir})")
+              with open(per_game_registry, "w") as f:
+                  json.dump(reg, f, indent=2, ensure_ascii=False)
+                  f.write("\n")
 
-          with open("registry.json", "w") as f:
-              json.dump(reg, f, indent=2)
-              f.write("\n")
+              patched.append(game_dir)
+              print(f"Patched {game_dir}: {sha256[:16]}...")
 
           print(f"Done. Patched: {patched or 'nothing'}")
           PYEOF
 
-      - name: Commit updated registry.json
+      - name: Commit updated per-game registry.json files
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add registry.json
+          git add '*/registry.json'
           if git diff --cached --quiet; then
-            echo "registry.json unchanged — nothing to commit."
+            echo "No per-game registry.json files changed — nothing to commit."
           else
-            git commit -m "ci: update registry.json sha256 hashes [skip ci]"
+            git commit -m "ci: update per-game registry.json sha256 hashes [skip ci]"
             git push
           fi
