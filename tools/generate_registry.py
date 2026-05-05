@@ -72,26 +72,10 @@ def load_json(path: str) -> dict:
 def save_json(path: str, data) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-
-
-def extract_sha256s(main_registry: dict) -> dict:
-    """Pull sha256 keyed by game_name from old flat main registry format."""
-    result = {}
-    for trainer in main_registry.get("trainers", []):
-        gname = trainer.get("game_name", "")
-        for entry in trainer.get("entries", []):
-            sha = entry.get("sha256", "")
-            if sha:
-                result[gname] = sha
-    return result
+        f.write("\n")
 
 
 def main():
-    sha256_map = {}
-    if os.path.exists(MAIN_REGISTRY):
-        old = load_json(MAIN_REGISTRY)
-        sha256_map = extract_sha256s(old)
-
     index = []
 
     for game_dir in sorted(os.listdir(DLLS_DIR)):
@@ -114,20 +98,22 @@ def main():
         for cpp in sorted(cpp_files):
             features.extend(parse_features(cpp))
 
-        game_id       = ver["game_id"]
-        game_name     = ver["game_name"]
-        trainer_ver   = ver["trainer_version"]
-        game_ver      = ver.get("game_version", "")
-        vc            = ver["version_constraint"]
-        release_tag   = f"{game_name}-{game_ver}-{trainer_ver}"
+        game_id      = ver["game_id"]
+        game_name    = ver["game_name"]
+        trainer_ver  = ver["trainer_version"]
+        game_ver     = ver.get("game_version", "")
+        vc           = ver["version_constraint"]
+        release_tag  = f"{game_name}-{game_ver}-{trainer_ver}"
 
         per_game_path = os.path.join(full, "registry.json")
 
-        # Preserve sha256: per-game file > old main registry > ""
-        sha256 = sha256_map.get(game_name, "")
+        # Preserve existing sha256 from the per-game registry.json if present;
+        # it will be filled in properly by the CI pipeline after a build.
+        sha256 = ""
         if os.path.exists(per_game_path):
             existing = load_json(per_game_path)
-            sha256 = existing.get("sha256", sha256)
+            # Flat per-game format: sha256 sits at the top level
+            sha256 = existing.get("sha256", "")
 
         entry = {
             "game_id":            game_id,
