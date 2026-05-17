@@ -1,13 +1,3 @@
-// We Love Katamari REROLL+ Royal Reverie Trainer
-// Steam App 1730700, build 20552039
-// Target: WLKRR.exe, IL2CPP module: GameAssembly.dll
-//
-// Patterns sourced from WLKRR-Freeze.CT and WLKRR-EndLevel.CT
-//   Freeze time:    FF 41 40 48 83 C4 28  — inc [rcx+40], NOP 3 bytes
-//   Freeze cntdown: 89 4A 3C 48 83 C4 28 C3 E8 — 1st match, NOP 3 bytes
-//   End level:      89 4A 3C 48 83 C4 28 C3 E8 — 2nd match, cave writes 0
-
-#include "ITrainerModule.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <vector>
@@ -16,410 +6,307 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
 
-static char g_lastError[256] = "";
-static void SetLastErr(const char* msg) { strncpy(g_lastError, msg, sizeof(g_lastError) - 1); }
+struct TrainerFeatureInfo {
+    const char* id;
+    const char* name;
+    const char* description;
+    int is_toggle;
+    int hotkey;
+};
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
+// --- Utilities ---
 static DWORD FindPid(const wchar_t* exe) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return 0;
     PROCESSENTRY32W pe{ sizeof(pe) };
     DWORD pid = 0;
     if (Process32FirstW(snap, &pe))
-        do { if (_wcsicmp(pe.szExeFile, exe) == 0) { pid = pe.th32ProcessID; break; } }
-        while (Process32NextW(snap, &pe));
+        do { if (_wcsicmp(pe.szExeFile, exe) == 0) { pid = pe.th32ProcessID; break; } } while (Process32NextW(snap, &pe));
     CloseHandle(snap);
     return pid;
 }
 
-static bool GetModuleInfo(DWORD pid, const wchar_t* mod, uintptr_t& base, size_t& sz) {
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
-    if (snap == INVALID_HANDLE_VALUE) return false;
+static uintptr_t GetModuleBase(DWORD pid, const wchar_t* modName) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
     MODULEENTRY32W me{ sizeof(me) };
-    bool found = false;
+    uintptr_t base = 0;
     if (Module32FirstW(snap, &me))
-        do {
-            if (_wcsicmp(me.szModule, mod) == 0) {
-                base  = reinterpret_cast<uintptr_t>(me.modBaseAddr);
-                sz    = me.modBaseSize;
-                found = true;
-                break;
-            }
-        } while (Module32NextW(snap, &me));
+        do { if (_wcsicmp(me.szModule, modName) == 0) { base = (uintptr_t)me.modBaseAddr; break; } } while (Module32NextW(snap, &me));
     CloseHandle(snap);
-    return found;
+    return base;
 }
 
-static bool MemWriteRaw(HANDLE hProc, uintptr_t addr, const void* data, size_t size) {
+static bool MemWrite(HANDLE hProc, uintptr_t addr, const void* data, size_t size) {
     DWORD old;
-    VirtualProtectEx(hProc, (LPVOID)addr, size, PAGE_EXECUTE_READWRITE, &old);
+    if (!VirtualProtectEx(hProc, (LPVOID)addr, size, PAGE_EXECUTE_READWRITE, &old)) return false;
     SIZE_T r;
     bool ok = WriteProcessMemory(hProc, (LPVOID)addr, data, size, &r);
     VirtualProtectEx(hProc, (LPVOID)addr, size, old, &old);
-    return ok && r == size;
+    return ok;
 }
 
-// Scan entire module buffer for all occurrences of pat.
-static std::vector<uintptr_t> AobAll(HANDLE hProc, uintptr_t base, size_t sz,
-                                     const uint8_t* pat, size_t len,
-                                     bool* readOk = nullptr) {
+// AOB scan — 0x00 is wildcard (matches PowerWash framework convention)
+static uintptr_t AobScan(HANDLE hProc, uintptr_t base, size_t sz,
+                          const uint8_t* pat, size_t len) {
     std::vector<uint8_t> buf(sz);
     SIZE_T r = 0;
-    std::vector<uintptr_t> hits;
-
-    bool ok = ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r) && r > 0;
-    if (readOk) *readOk = ok;           // always write result before returning
-    if (!ok && r == 0) return hits;     // total failure — nothing was read
-
-    // r bytes were read (may be less than sz if partial); scan what we got
-    for (size_t i = 0; i + len <= r; ++i)
-        if (memcmp(buf.data() + i, pat, len) == 0)
-            hits.push_back(base + i);
-    return hits;
-}
-
-static uintptr_t AobFirst(HANDLE hProc, uintptr_t base, size_t sz,
-                           const uint8_t* pat, size_t len) {
-    auto hits = AobAll(hProc, base, sz, pat, len);
-    return hits.empty() ? 0 : hits[0];
-}
-
-static uintptr_t AllocNear(HANDLE hProc, uintptr_t hint, size_t size) {
-    SYSTEM_INFO si; GetSystemInfo(&si);
-    const uintptr_t gran = si.dwAllocationGranularity;
-    const uintptr_t lo = (hint > 0x7FF00000ULL) ? hint - 0x7FF00000ULL
-                                                 : (uintptr_t)si.lpMinimumApplicationAddress;
-    const uintptr_t hi = hint + 0x7FF00000ULL;
-    for (uintptr_t a = (hint & ~(gran-1)); a > lo; a -= gran) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQueryEx(hProc, (LPCVOID)a, &mbi, sizeof(mbi))) continue;
-        if (mbi.State == MEM_FREE) {
-            void* p = VirtualAllocEx(hProc, (LPVOID)a, size,
-                                     MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-            if (p) return (uintptr_t)p;
+    if (!ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r)) return 0;
+    for (size_t i = 0; i + len <= r; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < len; j++) {
+            if (pat[j] != 0x00 && buf[i + j] != pat[j]) { match = false; break; }
         }
+        if (match) return base + i;
     }
-    for (uintptr_t a = (hint+gran)&~(gran-1); a < hi; a += gran) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQueryEx(hProc, (LPCVOID)a, &mbi, sizeof(mbi))) continue;
-        if (mbi.State == MEM_FREE) {
-            void* p = VirtualAllocEx(hProc, (LPVOID)a, size,
-                                     MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-            if (p) return (uintptr_t)p;
+    return 0;
+}
+
+// AobScan with nth-occurrence selection (0-based)
+static uintptr_t AobScanNth(HANDLE hProc, uintptr_t base, size_t sz,
+                              const uint8_t* pat, size_t len, int nth) {
+    std::vector<uint8_t> buf(sz);
+    SIZE_T r = 0;
+    if (!ReadProcessMemory(hProc, (LPCVOID)base, buf.data(), sz, &r)) return 0;
+    int found = 0;
+    for (size_t i = 0; i + len <= r; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < len; j++) {
+            if (pat[j] != 0x00 && buf[i + j] != pat[j]) { match = false; break; }
+        }
+        if (match) {
+            if (found == nth) return base + i;
+            ++found;
         }
     }
     return 0;
 }
 
-// ── Patch site ────────────────────────────────────────────────────────────────
-
-struct PatchSite {
-    uintptr_t addr      = 0;
-    uint8_t   orig[16]  = {};
-    size_t    len       = 0;
-    uintptr_t cave      = 0;   // non-zero = code cave installed here
-    bool      active    = false;
-};
-
-// ── Feature ───────────────────────────────────────────────────────────────────
-
 struct Feature {
-    TrainerFeatureInfo info;
-    std::atomic<bool>  enabled{false};
-    std::atomic<int>   vk_code{0};
-    Feature(const char* id_, const char* n, const char* d, int tog, int vk)
-        : info{id_, n, d, tog, vk}, vk_code(vk) {}
+    TrainerFeatureInfo  info;
+    std::atomic<bool>   enabled{ false };
+    std::atomic<int>    vk_code{ 0 };
+    Feature(const char* i, const char* n, const char* d, int tog, int vk)
+        : info{ i, n, d, tog, vk }, vk_code(vk) {}
 };
 
-// ── Trainer ───────────────────────────────────────────────────────────────────
-
-class WLKRRTrainer {
+class WLKTrainer {
 public:
-    WLKRRTrainer() : m_running(false), m_hProc(nullptr) {
-        m_features.emplace_back("end_level",   "End Level",   "Set countdown to 0 — ends level on next tick", 1, VK_F1);
-        m_features.emplace_back("freeze_time", "Freeze Time", "Freeze timer display and countdown",           1, VK_F2);
+    HANDLE              m_hProc  = nullptr;
+    std::atomic<bool>   m_running{ false };
+    std::thread         m_thread;
+    std::list<Feature>  m_features;
 
-        auto it = m_features.begin();
-        m_fEndLevel   = &(*it++);
-        m_fFreezeTime = &(*it++);
+    // ── Freeze Time ───────────────────────────────────────────────────────
+    // Patch 1 "Time":     FF 41 40 → 90 90 90   (inc [rcx+40] → NOP)
+    // Patch 2 "Countdown":89 4A 3C → 90 90 90   (mov [rdx+3C],ecx → NOP, occ.0)
+    uintptr_t addrTime     = 0;
+    uint8_t   origTime[3]  = {};
+    uintptr_t addrCountdown     = 0;
+    uint8_t   origCountdown[3]  = {};
+
+    // ── End Level ─────────────────────────────────────────────────────────
+    // 14-byte absolute jmp hook at context pattern +6
+    //   Pattern: 8B 42 3C 8D 48 FF 89 4A 3C 48 83 C4
+    //   Hook at: +6  (89 4A 3C 48 83 C4 28  = 7 stolen bytes)
+    //   Cave:    mov dword ptr [rdx+3C],0 / add rsp,28 / ret
+    uintptr_t addrEndLevel       = 0;
+    uint8_t   origEndLevel[14]   = {};
+    uintptr_t caveEndLevel       = 0;
+
+    WLKTrainer() {
+        m_features.emplace_back("freeze_time", "Freeze Time",
+            "Prevents the round timer from ticking down.", 1, VK_F1);
+        m_features.emplace_back("end_level",   "End Level",
+            "Forces countdown to zero, completing the level on next tick.", 1, VK_F2);
     }
 
-    ~WLKRRTrainer() { Shutdown(); }
-
     bool Initialize() {
-        DWORD pid = FindPid(L"WLKRR.exe");
-        if (!pid) {
-            SetLastErr("process not found — is We Love Katamari REROLL running?");
-            return false;
+        // Wait up to 30 s for the game process
+        DWORD pid = 0;
+        for (int i = 0; i < 300 && !pid; ++i) { pid = FindPid(L"WLKRR.exe"); Sleep(100); }
+        if (!pid) return false;
+
+        m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+        if (!m_hProc) return false;
+
+        // Wait up to 30 s for GameAssembly.dll
+        uintptr_t gaBase = 0;
+        for (int i = 0; i < 300 && !gaBase; ++i) { gaBase = GetModuleBase(pid, L"GameAssembly.dll"); Sleep(100); }
+        if (!gaBase) return false;
+
+        // IL2CPP JIT warm-up
+        Sleep(2000);
+
+        const size_t scanSize = 0x3000000; // 48 MB — covers the IL2CPP .text section
+
+        // ── Patch 1: Time ─────────────────────────────────────────────────
+        // Pattern: FF 41 40 48 83 C4 28   (unique, first occurrence)
+        // We only NOP the first 3 bytes: FF 41 40 = inc dword ptr [rcx+40]
+        {
+            uint8_t pat[] = { 0xFF,0x41,0x40, 0x48,0x83,0xC4,0x28 };
+            uintptr_t hit = AobScan(m_hProc, gaBase, scanSize, pat, sizeof(pat));
+            if (hit) {
+                addrTime = hit;
+                ReadProcessMemory(m_hProc, (LPCVOID)addrTime, origTime, 3, nullptr);
+            }
         }
-        m_hProc = OpenProcess(
-            PROCESS_VM_READ | PROCESS_VM_WRITE |
-            PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION,
-            FALSE, pid);
-        if (!m_hProc) {
-            char buf[128];
-            wsprintfA(buf, "OpenProcess failed (error %lu) — run as administrator", GetLastError());
-            SetLastErr(buf);
-            return false;
+
+        // ── Patch 2: Countdown ────────────────────────────────────────────
+        // Pattern: 89 4A 3C 48 83 C4 28 C3 E8   occurrence 0 (~62E218)
+        // occurrence 1 (~638958) is the End Level hook site.
+        // We only NOP the first 3 bytes: 89 4A 3C = mov [rdx+3C],ecx
+        {
+            uint8_t pat[] = { 0x89,0x4A,0x3C, 0x48,0x83,0xC4,0x28, 0xC3,0xE8 };
+            uintptr_t hit = AobScanNth(m_hProc, gaBase, scanSize, pat, sizeof(pat), 0);
+            if (hit) {
+                addrCountdown = hit;
+                ReadProcessMemory(m_hProc, (LPCVOID)addrCountdown, origCountdown, 3, nullptr);
+            }
         }
-        if (!ScanPatterns(pid)) {
-            CloseHandle(m_hProc); m_hProc = nullptr;
-            return false;
+
+        // ── End Level cave + hook ─────────────────────────────────────────
+        // Context pattern (12 bytes) uniquely identifies the injection site:
+        //   8B 42 3C  = mov eax,[rdx+3C]
+        //   8D 48 FF  = lea ecx,[rax-1]
+        //   89 4A 3C  = mov [rdx+3C],ecx   ← hook at context+6
+        //   48 83 C4  = add rsp (partial)
+        // Stolen: 7 bytes (89 4A 3C  +  48 83 C4 28)
+        // Cave:   mov dword ptr [rdx+3C],0 / add rsp,28 / ret  (complete tail)
+        {
+            uint8_t ctx[] = { 0x8B,0x42,0x3C, 0x8D,0x48,0xFF,
+                               0x89,0x4A,0x3C, 0x48,0x83,0xC4 };
+            uintptr_t hit = AobScan(m_hProc, gaBase, scanSize, ctx, sizeof(ctx));
+            if (hit) {
+                addrEndLevel = hit + 6; // offset to actual injection point
+
+                // Save 14 bytes (7 stolen + 7 slack for safe restore)
+                ReadProcessMemory(m_hProc, (LPCVOID)addrEndLevel, origEndLevel, 14, nullptr);
+
+                // Allocate cave
+                caveEndLevel = (uintptr_t)VirtualAllocEx(
+                    m_hProc, nullptr, 64,
+                    MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+
+                if (caveEndLevel) {
+                    // Cave shellcode (12 bytes payload + 14-byte return trampoline slot):
+                    //   C7 42 3C 00 00 00 00  = mov dword ptr [rdx+3C], 0
+                    //   48 83 C4 28           = add rsp, 28          (stolen epilogue)
+                    //   C3                    = ret                   (function tail)
+                    // No return jmp needed — cave IS the complete function tail.
+                    uint8_t cave[] = {
+                        0xC7,0x42,0x3C,0x00,0x00,0x00,0x00,  // mov dword ptr [rdx+3C], 0
+                        0x48,0x83,0xC4,0x28,                  // add rsp, 28
+                        0xC3                                   // ret
+                    };
+                    WriteProcessMemory(m_hProc, (LPVOID)caveEndLevel, cave, sizeof(cave), nullptr);
+                }
+            }
         }
+
         m_running = true;
-        m_thread  = std::thread(&WLKRRTrainer::Loop, this);
+        m_thread = std::thread(&WLKTrainer::Loop, this);
         return true;
+    }
+
+    void Loop() {
+        bool prevFreezeTime = false;
+        bool prevEndLevel   = false;
+
+        while (m_running) {
+            // Hotkey edge detection (same pattern as PowerWash trainer)
+            for (auto& f : m_features) {
+                int vk = f.vk_code.load();
+                if (vk && (GetAsyncKeyState(vk) & 1)) f.enabled = !f.enabled.load();
+            }
+
+            auto it = m_features.begin();
+
+            // ── Feature: Freeze Time ──────────────────────────────────────
+            bool wantFreezeTime = it->enabled.load();
+            if (wantFreezeTime != prevFreezeTime) {
+                const uint8_t nop3[3] = { 0x90,0x90,0x90 };
+                if (wantFreezeTime) {
+                    // Apply both patches — skip whichever address we failed to find
+                    if (addrTime)      MemWrite(m_hProc, addrTime,      nop3,         3);
+                    if (addrCountdown) MemWrite(m_hProc, addrCountdown,  nop3,         3);
+                } else {
+                    if (addrTime)      MemWrite(m_hProc, addrTime,      origTime,     3);
+                    if (addrCountdown) MemWrite(m_hProc, addrCountdown,  origCountdown,3);
+                }
+                prevFreezeTime = wantFreezeTime;
+            }
+
+            ++it;
+
+            // ── Feature: End Level ────────────────────────────────────────
+            // 14-byte absolute jmp hook (FF 25 00000000 <8-byte addr>)
+            // Bytes 7-13 of origEndLevel serve as the NOP pad / restore buffer.
+            bool wantEndLevel = it->enabled.load();
+            if (wantEndLevel != prevEndLevel && addrEndLevel && caveEndLevel) {
+                if (wantEndLevel) {
+                    // Write 14-byte absolute jmp: FF 25 00 00 00 00 [caveEndLevel]
+                    uint8_t hook[14] = { 0xFF,0x25,0x00,0x00,0x00,0x00 };
+                    memcpy(&hook[6], &caveEndLevel, 8);
+                    MemWrite(m_hProc, addrEndLevel, hook, 14);
+                } else {
+                    MemWrite(m_hProc, addrEndLevel, origEndLevel, 14);
+                }
+                prevEndLevel = wantEndLevel;
+            }
+
+            Sleep(10);
+        }
     }
 
     void Shutdown() {
         m_running = false;
         if (m_thread.joinable()) m_thread.join();
-        if (m_hProc) {
-            if (m_siteEndLevel.active)  RestoreSite(m_siteEndLevel);
-            if (m_siteTimeInc.active)   RestoreSite(m_siteTimeInc);
-            if (m_siteCountdown.active) RestoreSite(m_siteCountdown);
-            if (m_siteEndLevel.cave)
-                VirtualFreeEx(m_hProc, (LPVOID)m_siteEndLevel.cave, 0, MEM_RELEASE);
-            CloseHandle(m_hProc);
-            m_hProc = nullptr;
-        }
+        // Restore patches on exit
+        if (addrTime      && origTime[0])      MemWrite(m_hProc, addrTime,      origTime,      3);
+        if (addrCountdown && origCountdown[0]) MemWrite(m_hProc, addrCountdown,  origCountdown, 3);
+        if (addrEndLevel  && caveEndLevel)     MemWrite(m_hProc, addrEndLevel,   origEndLevel,  14);
+        if (caveEndLevel)  { VirtualFreeEx(m_hProc, (LPVOID)caveEndLevel, 0, MEM_RELEASE); caveEndLevel = 0; }
+        if (m_hProc)       { CloseHandle(m_hProc); m_hProc = nullptr; }
     }
 
-    const char* GetName()    const { return "We Love Katamari REROLL+ Royal Reverie Trainer"; }
-    const char* GetVersion() const { return "1.0.0"; }
-
-    int GetFeatureCount() const { return static_cast<int>(m_features.size()); }
-
-    const TrainerFeatureInfo* GetFeatureInfo(int idx) const {
-        auto it = m_features.begin();
-        for (int i = 0; i < idx && it != m_features.end(); ++i) ++it;
-        return it != m_features.end() ? &it->info : nullptr;
+    int                      GetFeatureCount()   { return (int)m_features.size(); }
+    const TrainerFeatureInfo* GetFeatureInfo(int idx) {
+        auto it = m_features.begin(); std::advance(it, idx); return &it->info;
     }
-
-    int GetFeatureEnabled(const char* id) const {
-        for (const auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) return f.enabled.load() ? 1 : 0;
+    int  GetFeatureEnabled(const char* id) {
+        for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.enabled.load() ? 1 : 0;
         return 0;
     }
-
-    void SetFeatureEnabled(const char* id, int enabled) {
-        for (auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0 && f.info.is_toggle) {
-                f.enabled = (enabled != 0);
-                return;
-            }
+    void SetFeatureEnabled(const char* id, int en) {
+        for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.enabled = (en != 0);
     }
-
-    void ActivateFeature(const char* /*id*/) {}  // all features are toggles
-
+    void ActivateFeature(const char* /*id*/) {}
     void SetKeybind(const char* id, int vk) {
-        for (auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) { f.vk_code = vk; return; }
+        for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) f.vk_code = vk;
     }
-
-    int GetKeybind(const char* id) const {
-        for (const auto& f : m_features)
-            if (strcmp(f.info.id, id) == 0) return f.vk_code.load();
+    int  GetKeybind(const char* id) {
+        for (auto& f : m_features) if (strcmp(f.info.id, id) == 0) return f.vk_code.load();
         return 0;
     }
-
-private:
-    std::atomic<bool>  m_running;
-    HANDLE             m_hProc;
-    std::thread        m_thread;
-    std::list<Feature> m_features;
-
-    Feature* m_fEndLevel   = nullptr;
-    Feature* m_fFreezeTime = nullptr;
-
-    PatchSite m_siteEndLevel;   // code cave — 2nd countdown match, writes 0
-    PatchSite m_siteTimeInc;    // NOP — time increment (FF 41 40)
-    PatchSite m_siteCountdown;  // NOP — 1st countdown match (89 4A 3C)
-
-    // ── Scan ──────────────────────────────────────────────────────────────────
-
-    bool ScanPatterns(DWORD pid) {
-    char buf[256];
-
-    uintptr_t gaBase = 0; size_t gaSize = 0;
-    if (!GetModuleInfo(pid, L"GameAssembly.dll", gaBase, gaSize)) {
-        SetLastErr("GameAssembly.dll not found — game may still be loading");
-        return false;
-    }
-
-    // ── Countdown pattern (>=2 required) ─────────────────────────────────────
-    static const uint8_t PAT_CD[] = {
-    0x89, 0x4A, 0x3C,
-    0x48, 0x83, 0xC4, 0x28
-    };
-    bool readOk = false;
-auto cdHits = AobAll(m_hProc, gaBase, gaSize,
-                     PAT_CD, sizeof(PAT_CD), &readOk);
-    if (!readOk) {
-        SetLastErr("ReadProcessMemory failed on GameAssembly.dll — "
-                   "run as administrator or wait for the game to finish loading");
-        return false;
-    }
-    if (cdHits.size() < 2) {
-        // FIX 1: snprintf, not wsprintfA, so %zu works correctly
-        snprintf(buf, sizeof(buf),
-                 "countdown pattern: need >=2 matches, found %zu — wrong build?",
-                 cdHits.size());
-        SetLastErr(buf);
-        return false;
-    }
-
-    // ── Time increment pattern ────────────────────────────────────────────────
-    static const uint8_t PAT_TI[] = {
-        0xFF,0x41,0x40, 0x48,0x83,0xC4,0x28
-    };
-    uintptr_t tiAddr = AobFirst(m_hProc, gaBase, gaSize, PAT_TI, sizeof(PAT_TI));
-    if (!tiAddr) {
-        SetLastErr("time increment pattern not found — wrong build?");
-        return false;
-    }
-
-    // ── siteCountdown ─────────────────────────────────────────────────────────
-    m_siteCountdown.addr = cdHits[0];
-    m_siteCountdown.len  = 3;
-    ReadProcessMemory(m_hProc, (LPCVOID)cdHits[0], m_siteCountdown.orig, 3, nullptr);
-
-    // ── siteTimeInc ───────────────────────────────────────────────────────────
-    m_siteTimeInc.addr = tiAddr;
-    m_siteTimeInc.len  = 3;
-    ReadProcessMemory(m_hProc, (LPCVOID)tiAddr, m_siteTimeInc.orig, 3, nullptr);
-
-    // ── siteEndLevel (code cave) ──────────────────────────────────────────────
-    uintptr_t elAddr = cdHits[1];
-    uintptr_t cave   = AllocNear(m_hProc, elAddr, 32);
-    if (!cave) {
-        SetLastErr("failed to allocate code cave for end_level");
-        return false;
-    }
-
-    m_siteEndLevel.addr = elAddr;
-    m_siteEndLevel.len  = 7;
-    m_siteEndLevel.cave = cave;
-    ReadProcessMemory(m_hProc, (LPCVOID)elAddr, m_siteEndLevel.orig, 7, nullptr);
-
-    // Cave layout (16 bytes):
-    //   0..6   C7 42 3C 00 00 00 00  — mov dword [rdx+3C], 0
-    //   7..10  48 83 C4 28           — add rsp, 28
-    //   11     E9                    — JMP rel32 opcode
-    //   12..15 xx xx xx xx           — rel32: target = (elAddr+7) - (cave+16)
-    uint8_t caveBytes[16] = {};
-    caveBytes[0]=0xC7; caveBytes[1]=0x42; caveBytes[2]=0x3C;
-    caveBytes[3]=0x00; caveBytes[4]=0x00; caveBytes[5]=0x00; caveBytes[6]=0x00;
-    caveBytes[7]=0x48; caveBytes[8]=0x83; caveBytes[9]=0xC4; caveBytes[10]=0x28;
-    caveBytes[11]=0xE9;
-
-    // FIX 3: rip_after_jmp = cave+16, not cave+11+5 applied to wrong base
-    int32_t rel = static_cast<int32_t>((elAddr + 7) - (cave + 16));
-    memcpy(&caveBytes[12], &rel, 4);
-
-    WriteProcessMemory(m_hProc, (LPVOID)cave, caveBytes, sizeof(caveBytes), nullptr);
-    return true;
-}
-
-    // ── Patch helpers ─────────────────────────────────────────────────────────
-
-    void ApplyNop(PatchSite& s) {
-        if (s.active || !s.addr) return;
-        uint8_t nops[16] = {};
-        memset(nops, 0x90, s.len);
-        MemWriteRaw(m_hProc, s.addr, nops, s.len);
-        s.active = true;
-    }
-
-    void ApplyCaveJmp(PatchSite& s) {
-        if (s.active || !s.addr || !s.cave) return;
-        // 5-byte rel32 JMP + 2 NOPs (total 7 bytes)
-        uint8_t patch[7] = { 0xE9,0,0,0,0, 0x90,0x90 };
-        int32_t rel = static_cast<int32_t>(s.cave - s.addr - 5);
-        memcpy(&patch[1], &rel, 4);
-        MemWriteRaw(m_hProc, s.addr, patch, s.len);
-        s.active = true;
-    }
-
-    void RestoreSite(PatchSite& s) {
-        if (!s.active || !s.addr) return;
-        MemWriteRaw(m_hProc, s.addr, s.orig, s.len);
-        s.active = false;
-    }
-
-    // ── Main loop ─────────────────────────────────────────────────────────────
-
-    void Loop() {
-        bool prevEndLevel   = false;
-        bool prevFreezeTime = false;
-
-        while (m_running) {
-            // Hotkey dispatch
-            for (auto& f : m_features) {
-                int vk = f.vk_code.load();
-                if (vk && (GetAsyncKeyState(vk) & 1))
-                    f.enabled = !f.enabled.load();
-            }
-
-            bool endLevel   = m_fEndLevel->enabled.load();
-            bool freezeTime = m_fFreezeTime->enabled.load();
-
-            if (endLevel != prevEndLevel) {
-                if (endLevel) ApplyCaveJmp(m_siteEndLevel);
-                else          RestoreSite(m_siteEndLevel);
-                prevEndLevel = endLevel;
-            }
-
-            if (freezeTime != prevFreezeTime) {
-                if (freezeTime) {
-                    ApplyNop(m_siteTimeInc);
-                    ApplyNop(m_siteCountdown);
-                } else {
-                    RestoreSite(m_siteTimeInc);
-                    RestoreSite(m_siteCountdown);
-                }
-                prevFreezeTime = freezeTime;
-            }
-
-            Sleep(10);
-        }
-
-        if (m_siteEndLevel.active)  RestoreSite(m_siteEndLevel);
-        if (m_siteTimeInc.active)   RestoreSite(m_siteTimeInc);
-        if (m_siteCountdown.active) RestoreSite(m_siteCountdown);
-    }
+    const char* GetName()    { return "We Love Katamari REROLL Trainer"; }
+    const char* GetVersion() { return "1.0.0"; }
 };
 
-// ── C ABI exports ─────────────────────────────────────────────────────────────
-
 extern "C" {
-
-void* trainer_create()            { return new WLKRRTrainer(); }
-void  trainer_destroy(void* h)    { delete static_cast<WLKRRTrainer*>(h); }
-int   trainer_initialize(void* h) { return static_cast<WLKRRTrainer*>(h)->Initialize() ? 1 : 0; }
-void  trainer_shutdown(void* h)   { static_cast<WLKRRTrainer*>(h)->Shutdown(); }
-
-const char* trainer_get_name(void* h)    { return static_cast<WLKRRTrainer*>(h)->GetName(); }
-const char* trainer_get_version(void* h) { return static_cast<WLKRRTrainer*>(h)->GetVersion(); }
-
-int trainer_get_feature_count(void* h)
-    { return static_cast<WLKRRTrainer*>(h)->GetFeatureCount(); }
-const TrainerFeatureInfo* trainer_get_feature_info(void* h, int idx)
-    { return static_cast<WLKRRTrainer*>(h)->GetFeatureInfo(idx); }
-int trainer_get_feature_enabled(void* h, const char* id)
-    { return static_cast<WLKRRTrainer*>(h)->GetFeatureEnabled(id); }
-void trainer_set_feature_enabled(void* h, const char* id, int en)
-    { static_cast<WLKRRTrainer*>(h)->SetFeatureEnabled(id, en); }
-void trainer_activate_feature(void* h, const char* id)
-    { static_cast<WLKRRTrainer*>(h)->ActivateFeature(id); }
-void trainer_set_keybind(void* h, const char* id, int vk)
-    { static_cast<WLKRRTrainer*>(h)->SetKeybind(id, vk); }
-int trainer_get_keybind(void* h, const char* id)
-    { return static_cast<WLKRRTrainer*>(h)->GetKeybind(id); }
-
-const char* trainer_get_last_error() { return g_lastError; }
-
-} // extern "C"
+    __declspec(dllexport) void*       trainer_create()              { return new WLKTrainer(); }
+    __declspec(dllexport) void        trainer_destroy(void* h)      { static_cast<WLKTrainer*>(h)->Shutdown(); delete static_cast<WLKTrainer*>(h); }
+    __declspec(dllexport) int         trainer_initialize(void* h)   { return static_cast<WLKTrainer*>(h)->Initialize() ? 1 : 0; }
+    __declspec(dllexport) void        trainer_shutdown(void* h)     { static_cast<WLKTrainer*>(h)->Shutdown(); }
+    __declspec(dllexport) const char* trainer_get_name(void* h)     { return static_cast<WLKTrainer*>(h)->GetName(); }
+    __declspec(dllexport) const char* trainer_get_version(void* h)  { return static_cast<WLKTrainer*>(h)->GetVersion(); }
+    __declspec(dllexport) const char* trainer_get_last_error()      { return ""; }
+    __declspec(dllexport) int         trainer_get_feature_count(void* h)                       { return static_cast<WLKTrainer*>(h)->GetFeatureCount(); }
+    __declspec(dllexport) const TrainerFeatureInfo* trainer_get_feature_info(void* h, int i)   { return static_cast<WLKTrainer*>(h)->GetFeatureInfo(i); }
+    __declspec(dllexport) int         trainer_get_feature_enabled(void* h, const char* id)     { return static_cast<WLKTrainer*>(h)->GetFeatureEnabled(id); }
+    __declspec(dllexport) void        trainer_set_feature_enabled(void* h, const char* id, int en) { static_cast<WLKTrainer*>(h)->SetFeatureEnabled(id, en); }
+    __declspec(dllexport) void        trainer_activate_feature(void* h, const char* id)        { static_cast<WLKTrainer*>(h)->ActivateFeature(id); }
+    __declspec(dllexport) void        trainer_set_keybind(void* h, const char* id, int vk)     { static_cast<WLKTrainer*>(h)->SetKeybind(id, vk); }
+    __declspec(dllexport) int         trainer_get_keybind(void* h, const char* id)             { return static_cast<WLKTrainer*>(h)->GetKeybind(id); }
+}
