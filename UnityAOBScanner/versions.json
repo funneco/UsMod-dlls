@@ -1,0 +1,10 @@
+{
+  "game_id": "unity_aob_scanner",
+  "game_name": "Unity AOB Scanner",
+  "game_version": "1.0.0",
+  "trainer_version": "1.0.0",
+  "version_constraint": {
+    "type": "exact",
+    "builds": ["1"]
+  }
+}
