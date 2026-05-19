@@ -6,10 +6,12 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <iterator>
 
 // ============================================================
 //  Unity AOB Scanner Trainer
-//  Based on WeMod TrainerLib patterns
+//  Based on UsMOD TrainerLib patterns
 //  Target module: GameAssembly.dll
 // ============================================================
 
@@ -23,7 +25,7 @@ struct TrainerFeatureInfo {
 
 // ─────────────────────────────────────────────────────────────
 //  Unity Runtime Detection
-//  Based on WeMod TrainerLib patterns (mono.dll, il2cpp, GameAssembly)
+//  Based on UsMOD TrainerLib patterns (mono.dll, il2cpp, GameAssembly)
 // ─────────────────────────────────────────────────────────────
 
 enum class UnityRuntime { Unknown, Mono, IL2CPP };
@@ -38,7 +40,7 @@ struct UnityRuntimeInfo {
 };
 
 // ─────────────────────────────────────────────────────────────
-//  Unity AOB Scanner Utilities (WeMod-style)
+//  Unity AOB Scanner Utilities (UsMOD-style)
 // ─────────────────────────────────────────────────────────────
 
 namespace UnityAOB {
@@ -210,7 +212,7 @@ struct Feature {
 
 // ─────────────────────────────────────────────────────────────
 //  UnityAOBScannerTrainer
-//  Based on WeMod TrainerLib patterns for Unity game detection
+//  Based on UsMOD TrainerLib patterns for Unity game detection
 // ─────────────────────────────────────────────────────────────
 
 class UnityAOBScannerTrainer {
@@ -223,7 +225,7 @@ public:
     // Module info
     DWORD m_pid = 0;
     uintptr_t m_moduleBase = 0;
-    UnityRuntimeInfo m_runtimeInfo;  // WeMod-style runtime detection
+    UnityRuntimeInfo m_runtimeInfo;  // UsMOD-style runtime detection
 
     // Hook storage - generic array for Unity game hooks
     struct UnityHook {
@@ -235,7 +237,7 @@ public:
     };
     std::vector<UnityHook> m_hooks;
 
-    // Unity common AOB patterns (WeMod-style)
+    // Unity common AOB patterns (UsMOD-style)
     // These patterns are common across Unity games for money/cash manipulation
     struct UnityAOBPattern {
         const char* name;
@@ -267,7 +269,7 @@ public:
     }
 
     bool Initialize() {
-        // Detect Unity game process - WeMod style
+        // Detect Unity game process - UsMOD style
         // Look for processes with GameAssembly.dll (IL2CPP) or mono.dll (Mono)
         m_pid = FindUnityProcess();
         if (!m_pid) return false;
@@ -275,7 +277,7 @@ public:
         m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, m_pid);
         if (!m_hProc) return false;
 
-        // Detect runtime type (Mono vs IL2CPP) - WeMod pattern
+        // Detect runtime type (Mono vs IL2CPP) - UsMOD pattern
         m_runtimeInfo = UnityAOB::DetectUnityRuntime(m_pid);
         
         if (m_runtimeInfo.type == UnityRuntime::IL2CPP) {
@@ -286,7 +288,7 @@ public:
         
         if (!m_moduleBase) return false;
 
-        // Scan for Unity AOB patterns (WeMod-style)
+        // Scan for Unity AOB patterns (UsMOD-style)
         constexpr size_t SCAN_SIZE = 0x5000000;
         for (auto& pat : m_patterns) {
             pat.addr = UnityAOB::AobScan(m_hProc, m_moduleBase, SCAN_SIZE, pat.pattern, pat.len);
@@ -305,7 +307,7 @@ public:
 
 private:
     DWORD FindUnityProcess() {
-        // WeMod pattern: Look for GameAssembly.dll or mono.dll modules
+        // UsMOD pattern: Look for GameAssembly.dll or mono.dll modules
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap == INVALID_HANDLE_VALUE) return 0;
         
@@ -355,6 +357,7 @@ private:
         }
     }
 
+public:
     void Shutdown() {
         m_running = false;
         if (m_thread.joinable()) m_thread.join();

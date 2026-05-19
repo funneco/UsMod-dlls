@@ -14,9 +14,12 @@
   },
   "additional_dlls": [
     {
-      "name": "UnityAOBScanner",
-      "description": "Unity game AOB scanning support for IL2CPP games",
-      "dll_filename": "trainer.dll"
+      "game_id": "unity_aob_scanner",
+      "trainer_version": "1.0.0",
+      "release_tag": "UnityAOBScanner-1.0.0",
+      "repo": "funneco/UsMod-dlls",
+      "dll_filename": "trainer.dll",
+      "sha256": "placeholder-sha256-will-be-updated-on-release"
     }
   ],
   "features": [
