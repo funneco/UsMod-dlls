@@ -5,7 +5,7 @@
   "release_tag": "ScheduleOne-1.0.1f-1.0.0",
   "repo": "funneco/UsMod-dlls",
   "dll_filename": "trainer.dll",
-  "sha256": "17a62ee0edb12ed064ae65b049945a72b53aebdecfd389d9d8625a35432016d8",
+  "sha256": "4a4cde91651b565245f679eda0876ccd8a80b6a050bfd75059dd49267eb6bd9f",
   "version_constraint": {
     "type": "exact",
     "builds": [
