@@ -6,8 +6,8 @@
   "repo": "funneco/UsMod-dlls",
   "dll_filename": "trainer.dll",
   "version_constraint": {
-    "type": "any",
-    "builds": []
+    "type": "exact",
+    "builds": [1]
   },
   "features": [
   ]
