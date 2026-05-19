@@ -7,7 +7,7 @@
   "dll_filename": "trainer.dll",
   "version_constraint": {
     "type": "exact",
-    "builds": [1]
+    "builds": ["1"]
   },
   "features": [],
   "sha256": "e513df7cd2bd5e898e2469d61509ba97d7ec008c1ab3c676dbd9738dbf922faa"
