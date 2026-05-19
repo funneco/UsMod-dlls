@@ -35,6 +35,11 @@
       "game_id": "3164500",
       "game_name": "ScheduleOne",
       "registry": "ScheduleOne/registry.json"
+    },
+    {
+      "game_id": "unity_aob_scanner",
+      "game_name": "UnityAOBScanner",
+      "registry": "UnityAOBScanner/registry.json"
     }
   ]
 }

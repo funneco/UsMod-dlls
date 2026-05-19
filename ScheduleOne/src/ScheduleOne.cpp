@@ -18,7 +18,7 @@ struct TrainerFeatureInfo {
     const char* name;
     const char* description;
     int is_toggle;   // 1 = toggle, 0 = one-shot
-    int hotkey;
+    int default_vk;  // default Windows VK code
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -118,13 +118,25 @@ public:
     std::thread       m_thread;
     std::list<Feature> m_features;
 
+    // ── AOB addresses (patched in/out) ────────────────────────
+    // Cash_AOB: F3 0F 58 49 30 0F 57
+    uintptr_t addr_CashHook      = 0;
+    uint8_t   orig_CashHook[6]   = {};
+    uintptr_t cave_CashHook      = 0;
+    uint8_t*  mem_MoneyFlag      = nullptr; // Money_Flag from prompt.txt
+    uintptr_t mem_MoneyEditPtr   = 0;       // Money_Edit - stores the resolved pointer
+    
+    // Balans_AOB: F3 0F 10 81 ?? ?? 00 00 45 33 C9 45 33 C0 33 D2 E8 ?? ?? ?? ?? 48 85 DB
+    uintptr_t addr_BankHook      = 0;
+    uint8_t   orig_BankHook[11]  = {};
+    uintptr_t cave_BankHook      = 0;
+    uint8_t*  mem_BankMoneyFlag  = nullptr; // BankMoney_Flag from prompt.txt
+    uintptr_t mem_BankMoneyEditPtr = 0;       // BankMoney_Edit - stores the resolved pointer
+
     // ── Pointer cache (resolved at Initialize) ────────────────
-    uintptr_t ptr_MoneyEdit      = 0; // float* → on-hand cash
-    uintptr_t ptr_BankMoneyEdit  = 0; // float* → bank balance
     uintptr_t ptr_TimeEdit       = 0; // int*   → in-game hour counter
     uintptr_t ptr_WantedLevel    = 0; // int*   → police wanted level
 
-    // ── AOB addresses (patched in/out) ────────────────────────
     uintptr_t addr_HP            = 0;
     uint8_t   orig_HP[4]         = { 0xF3, 0x0F, 0x5C, 0xCE };
     uint8_t   patch_HP[4]        = { 0x0F, 0x58, 0xCE, 0x90 }; // addss xmm1,xmm6
@@ -303,10 +315,17 @@ public:
                     float one = 1.0f;
                     uint8_t cave[64] = {};
                     size_t off = 0;
-                    cave[off++]=0x68; memcpy(&cave[off],&one,4); off+=4; // push 1.0f
+                    // push (float)1
+                    cave[off++]=0x68; memcpy(&cave[off],&one,4); off+=4;
+                    // fld [rsp] - D9 04 24
+                    cave[off++]=0xD9; cave[off++]=0x04; cave[off++]=0x24;
+                    // movss xmm6,[rsp] - F3 0F 10 34 24
                     cave[off++]=0xF3; cave[off++]=0x0F; cave[off++]=0x10;
-                    cave[off++]=0x34; cave[off++]=0x24; // movss xmm6,[rsp]
-                    cave[off++]=0x48; cave[off++]=0x83; cave[off++]=0xC4; cave[off++]=0x08; // add rsp,8
+                    cave[off++]=0x34; cave[off++]=0x24;
+                    // fstp st(0) - D8 D8
+                    cave[off++]=0xD8; cave[off++]=0xD8;
+                    // add rsp,8 - 48 83 C4 08
+                    cave[off++]=0x48; cave[off++]=0x83; cave[off++]=0xC4; cave[off++]=0x08;
                     uintptr_t ret = addr_Growth + 5;
                     uint8_t jmp14[14]; BuildAbsJmp(jmp14, ret);
                     memcpy(&cave[off], jmp14, 14);
@@ -416,19 +435,107 @@ public:
             if (hit) addr_TimeSet = hit;
         }
 
-        // Cash pointer AOB: F3 0F 58 49 30 0F 57
+        // Cash_AOB hook: F3 0F 58 49 30 0F 57
         {
             uint8_t p[] = {0xF3,0x0F,0x58,0x49,0x30,0x0F,0x57};
             uintptr_t hit = AobScan(m_hProc, mod, SCAN_SIZE, p, sizeof(p));
-            if (hit) ptr_MoneyEdit = hit;
+            if (hit) {
+                addr_CashHook = hit;
+                MemRead(m_hProc, addr_CashHook, orig_CashHook, 6);
+                // Allocate cave for hook
+                cave_CashHook = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 256,
+                                      MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                // Allocate Money_Flag and Money_Edit storage (flag=4 bytes, ptr=8 bytes)
+                mem_MoneyFlag = (uint8_t*)VirtualAllocEx(m_hProc, nullptr, 12,
+                                   MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+                if (cave_CashHook && mem_MoneyFlag) {
+                    uint8_t cave[128] = {};
+                    size_t off = 0;
+                    // push rdi
+                    cave[off++]=0x57;
+                    // lea rdi,[rcx+30]
+                    cave[off++]=0x48; cave[off++]=0x8D; cave[off++]=0x79; cave[off++]=0x30;
+                    // mov [Money_Edit],rdi (store pointer for one-shot edit_cash)
+                    int32_t rel1 = (int32_t)(mem_MoneyFlag + 4 - (cave_CashHook + off + 4));
+                    cave[off++]=0x48; cave[off++]=0x89; cave[off++]=0x3D;
+                    memcpy(&cave[off], &rel1, 4); off += 4;
+                    // cmp byte ptr [Money_Flag],1
+                    int32_t rel2 = (int32_t)(mem_MoneyFlag - (cave_CashHook + off + 4));
+                    cave[off++]=0x83; cave[off++]=0x3C; cave[off++]=0x25;
+                    memcpy(&cave[off], &rel2, 4); off += 4;
+                    cave[off++]=0x01;
+                    // jne code (skip the mov if flag not set, jump is 10 bytes ahead)
+                    cave[off++]=0x75; cave[off++]=0x0A;
+                    // mov dword ptr [rdi],777777 (write 777777.0f)
+                    uint32_t val = 0x49D38000; // 777777.0f as int bits
+                    cave[off++]=0xC7; cave[off++]=0x07;
+                    memcpy(&cave[off], &val, 4); off += 4;
+                    // addss xmm1,[rdi] (execute original code with our pointer)
+                    cave[off++]=0xF3; cave[off++]=0x0F; cave[off++]=0x58; cave[off++]=0x4F; cave[off++]=0x00;
+                    // pop rdi
+                    cave[off++]=0x5F;
+                    // jmp return
+                    uintptr_t ret = addr_CashHook + 6;
+                    uint8_t jmp14[14]; BuildAbsJmp(jmp14, ret);
+                    memcpy(&cave[off], jmp14, 14); off += 14;
+                    MemWrite(m_hProc, cave_CashHook, cave, 128);
+                    // Write initial flag = 0
+                    uint8_t flagInit[12] = {0,0,0,0, 0,0,0,0, 0,0,0,0};
+                    MemWrite(m_hProc, (uintptr_t)mem_MoneyFlag, flagInit, 12);
+                }
+            }
         }
 
-        // Bank pointer AOB: F3 0F 10 81 ?? ?? 00 00 45 33 C9 45 33 C0 33 D2
+        // Balans_AOB hook: F3 0F 10 81 ?? ?? 00 00 45 33 C9 45 33 C0 33 D2 E8 ?? ?? ?? ?? 48 85 DB
         {
             uint8_t p[] = {0xF3,0x0F,0x10,0x81,0x00,0x00,0x00,0x00,
                            0x45,0x33,0xC9,0x45,0x33,0xC0,0x33,0xD2};
             uintptr_t hit = AobScan(m_hProc, mod, SCAN_SIZE, p, sizeof(p));
-            if (hit) ptr_BankMoneyEdit = hit;
+            if (hit) {
+                addr_BankHook = hit;
+                MemRead(m_hProc, addr_BankHook, orig_BankHook, 11);
+                cave_BankHook = (uintptr_t)VirtualAllocEx(m_hProc, nullptr, 256,
+                                       MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                mem_BankMoneyFlag = (uint8_t*)VirtualAllocEx(m_hProc, nullptr, 12,
+                                       MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+                if (cave_BankHook && mem_BankMoneyFlag) {
+                    uint8_t cave[128] = {};
+                    size_t off = 0;
+                    // push rdi
+                    cave[off++]=0x57;
+                    // lea rdi,[rcx+offset] - read offset from original code at +4
+                    int32_t offset = *(int32_t*)(orig_BankHook + 4);
+                    cave[off++]=0x48; cave[off++]=0x8D; cave[off++]=0xB9;
+                    memcpy(&cave[off], &offset, 4); off += 4;
+                    // mov [BankMoney_Edit],rdi (store pointer for one-shot edit_bank_balance)
+                    int32_t rel1 = (int32_t)(mem_BankMoneyFlag + 4 - (cave_BankHook + off + 4));
+                    cave[off++]=0x48; cave[off++]=0x89; cave[off++]=0x3D;
+                    memcpy(&cave[off], &rel1, 4); off += 4;
+                    // cmp byte ptr [BankMoney_Flag],1
+                    int32_t rel2 = (int32_t)(mem_BankMoneyFlag - (cave_BankHook + off + 4));
+                    cave[off++]=0x83; cave[off++]=0x3C; cave[off++]=0x25;
+                    memcpy(&cave[off], &rel2, 4); off += 4;
+                    cave[off++]=0x01;
+                    // jne code (skip the mov if flag not set, jump is 10 bytes ahead)
+                    cave[off++]=0x75; cave[off++]=0x0A;
+                    // mov dword ptr [rdi],777777 (write 777777.0f)
+                    uint32_t val = 0x49D38000; // 777777.0f as int bits
+                    cave[off++]=0xC7; cave[off++]=0x07;
+                    memcpy(&cave[off], &val, 4); off += 4;
+                    // pop rdi
+                    cave[off++]=0x5F;
+                    // readmem original 8 bytes (first part of original instruction)
+                    cave[off++]=0xF3; cave[off++]=0x0F; cave[off++]=0x10; cave[off++]=0x81;
+                    memcpy(&cave[off], &offset, 4); off += 4; // use the same offset
+                    // jmp return
+                    uintptr_t ret = addr_BankHook + 11;
+                    uint8_t jmp14[14]; BuildAbsJmp(jmp14, ret);
+                    memcpy(&cave[off], jmp14, 14); off += 14;
+                    MemWrite(m_hProc, cave_BankHook, cave, 128);
+                    uint8_t flagInit[12] = {0,0,0,0, 0,0,0,0, 0,0,0,0};
+                    MemWrite(m_hProc, (uintptr_t)mem_BankMoneyFlag, flagInit, 12);
+                }
+            }
         }
 
         // Time pointer AOB: 81 BB 28 01 00 00 90 01 00 00 48
@@ -473,14 +580,42 @@ public:
 
             auto it = m_features.begin();
 
-            // 1. unlimited_cash
+            // 1. unlimited_cash - hook-based, just write flag
             { bool en=it->enabled.load();
-              if (en && ptr_MoneyEdit) MemWriteFloat(m_hProc, ptr_MoneyEdit, 777777.0f); }
+              if (mem_MoneyFlag) {
+                  uint8_t flag = en ? 1 : 0;
+                  MemWrite(m_hProc, (uintptr_t)mem_MoneyFlag, &flag, 1);
+                  // Read the stored pointer from Money_Edit location
+                  MemRead(m_hProc, (uintptr_t)mem_MoneyFlag + 4, &mem_MoneyEditPtr, 8);
+              }
+              if (en!=p_cash && cave_CashHook && addr_CashHook) {
+                  if (en) {
+                      int32_t rel = (int32_t)(cave_CashHook - addr_CashHook - 5);
+                      uint8_t hook[5] = {0xE9}; memcpy(&hook[1], &rel, 4);
+                      MemWrite(m_hProc, addr_CashHook, hook, 5);
+                  } else MemWrite(m_hProc, addr_CashHook, orig_CashHook, 6);
+                  p_cash=en;
+              }
+            }
             ++it;
 
-            // 2. unlimited_balance
+            // 2. unlimited_balance - hook-based, just write flag
             { bool en=it->enabled.load();
-              if (en && ptr_BankMoneyEdit) MemWriteFloat(m_hProc, ptr_BankMoneyEdit, 777777.0f); }
+              if (mem_BankMoneyFlag) {
+                  uint8_t flag = en ? 1 : 0;
+                  MemWrite(m_hProc, (uintptr_t)mem_BankMoneyFlag, &flag, 1);
+                  // Read the stored pointer from BankMoney_Edit location
+                  MemRead(m_hProc, (uintptr_t)mem_BankMoneyFlag + 4, &mem_BankMoneyEditPtr, 8);
+              }
+              if (en!=p_bank && cave_BankHook && addr_BankHook) {
+                  if (en) {
+                      int32_t rel = (int32_t)(cave_BankHook - addr_BankHook - 5);
+                      uint8_t hook[5] = {0xE9}; memcpy(&hook[1], &rel, 4);
+                      MemWrite(m_hProc, addr_BankHook, hook, 5);
+                  } else MemWrite(m_hProc, addr_BankHook, orig_BankHook, 11);
+                  p_bank=en;
+              }
+            }
             ++it;
 
             // 3. multiply_exp_gain
@@ -586,33 +721,39 @@ public:
     void Shutdown() {
         m_running = false;
         if (m_thread.joinable()) m_thread.join();
-        if (addr_HP)          MemWrite(m_hProc,addr_HP,orig_HP,4);
-        if (addr_MoveSpeed)   MemWrite(m_hProc,addr_MoveSpeed,orig_MoveSpeed,14);
-        if (addr_Visibility)  MemWrite(m_hProc,addr_Visibility,orig_Visibility,5);
-        if (addr_RelationCalc)MemWrite(m_hProc,addr_RelationCalc,orig_RelCalc,2);
-        if (addr_Curfew)      MemWrite(m_hProc,addr_Curfew,orig_Curfew,2);
-        if (addr_Growth)      MemWrite(m_hProc,addr_Growth,orig_Growth,5);
-        if (addr_MultItem)    MemWrite(m_hProc,addr_MultItem,orig_MultItem,6);
-        if (addr_Cost)        MemWrite(m_hProc,addr_Cost,orig_Cost,7);
-        if (addr_ShopBuy)     MemWrite(m_hProc,addr_ShopBuy,orig_ShopBuy,2);
-        if (addr_Mixing)      MemWrite(m_hProc,addr_Mixing,orig_Mixing,3);
-        if (addr_Watering)    MemWrite(m_hProc,addr_Watering,orig_Watering,2);
-        if (addr_TimeSet)     MemWrite(m_hProc,addr_TimeSet,orig_TimeSet,3);
-        if (addr_EXP)         MemWrite(m_hProc,addr_EXP,orig_EXP,6);
+        if (addr_CashHook)      MemWrite(m_hProc,addr_CashHook,orig_CashHook,6);
+        if (addr_BankHook)      MemWrite(m_hProc,addr_BankHook,orig_BankHook,11);
+        if (addr_HP)            MemWrite(m_hProc,addr_HP,orig_HP,4);
+        if (addr_MoveSpeed)     MemWrite(m_hProc,addr_MoveSpeed,orig_MoveSpeed,14);
+        if (addr_Visibility)    MemWrite(m_hProc,addr_Visibility,orig_Visibility,5);
+        if (addr_RelationCalc)  MemWrite(m_hProc,addr_RelationCalc,orig_RelCalc,2);
+        if (addr_Curfew)        MemWrite(m_hProc,addr_Curfew,orig_Curfew,2);
+        if (addr_Growth)        MemWrite(m_hProc,addr_Growth,orig_Growth,5);
+        if (addr_MultItem)      MemWrite(m_hProc,addr_MultItem,orig_MultItem,6);
+        if (addr_Cost)          MemWrite(m_hProc,addr_Cost,orig_Cost,7);
+        if (addr_ShopBuy)       MemWrite(m_hProc,addr_ShopBuy,orig_ShopBuy,2);
+        if (addr_Mixing)        MemWrite(m_hProc,addr_Mixing,orig_Mixing,3);
+        if (addr_Watering)      MemWrite(m_hProc,addr_Watering,orig_Watering,2);
+        if (addr_TimeSet)       MemWrite(m_hProc,addr_TimeSet,orig_TimeSet,3);
+        if (addr_EXP)           MemWrite(m_hProc,addr_EXP,orig_EXP,6);
         auto FreeCave = [&](uintptr_t c) {
             if (c) VirtualFreeEx(m_hProc,(LPVOID)c,0,MEM_RELEASE);
         };
-        FreeCave(cave_MoveSpeed); FreeCave(cave_Visibility);
-        FreeCave(cave_Growth);    FreeCave(cave_MultItem);
-        FreeCave(cave_Cost);      FreeCave(cave_EXP);
+        FreeCave(cave_CashHook);   FreeCave(cave_BankHook);
+        FreeCave(cave_MoveSpeed);  FreeCave(cave_Visibility);
+        FreeCave(cave_Growth);     FreeCave(cave_MultItem);
+        FreeCave(cave_Cost);       FreeCave(cave_EXP);
+        // Free flag memory
+        if ((uintptr_t)mem_MoneyFlag) VirtualFreeEx(m_hProc, mem_MoneyFlag, 0, MEM_RELEASE);
+        if ((uintptr_t)mem_BankMoneyFlag) VirtualFreeEx(m_hProc, mem_BankMoneyFlag, 0, MEM_RELEASE);
         if (m_hProc) { CloseHandle(m_hProc); m_hProc=nullptr; }
     }
 
     void ActivateFeature(const char* id) {
-        if      (!strcmp(id,"edit_cash")          && ptr_MoneyEdit)
-                    MemWriteFloat(m_hProc, ptr_MoneyEdit, 999999.0f);
-        else if (!strcmp(id,"edit_bank_balance")  && ptr_BankMoneyEdit)
-                    MemWriteFloat(m_hProc, ptr_BankMoneyEdit, 999999.0f);
+        if      (!strcmp(id,"edit_cash")          && mem_MoneyEditPtr)
+                    MemWriteFloat(m_hProc, mem_MoneyEditPtr, 999999.0f);
+        else if (!strcmp(id,"edit_bank_balance")  && mem_BankMoneyEditPtr)
+                    MemWriteFloat(m_hProc, mem_BankMoneyEditPtr, 999999.0f);
         else if (!strcmp(id,"add_1_hour")         && ptr_TimeEdit) {
                     int32_t t=0; MemRead(m_hProc,ptr_TimeEdit,&t,4);
                     MemWriteInt(m_hProc,ptr_TimeEdit,t+1); }

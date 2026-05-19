@@ -12,20 +12,167 @@
       "22829923"
     ]
   },
+  "additional_dlls": [
+    {
+      "name": "UnityAOBScanner",
+      "description": "Unity game AOB scanning support for IL2CPP games",
+      "dll_filename": "trainer.dll"
+    }
+  ],
   "features": [
     {
-      "id": "instant_clean",
-      "name": "Instant Clean",
-      "description": "10k Power",
+      "id": "unlimited_cash",
+      "name": "Unlimited Cash",
+      "description": "On-hand money locked to $777,777",
       "is_toggle": true,
       "default_vk": 112
     },
     {
-      "id": "show_dirt",
-      "name": "Show Dirt",
-      "description": "Permanent Highlight",
+      "id": "unlimited_balance",
+      "name": "Unlimited Bank Balance",
+      "description": "Bank balance locked to $777,777",
+      "is_toggle": true,
+      "default_vk": 113
+    },
+    {
+      "id": "multiply_exp_gain",
+      "name": "EXP x7",
+      "description": "Multiplies XP gain by 7",
       "is_toggle": true,
       "default_vk": 114
+    },
+    {
+      "id": "instant_max_relationship",
+      "name": "Instant Max Relationship",
+      "description": "NPC relationship calc always passes",
+      "is_toggle": true,
+      "default_vk": 115
+    },
+    {
+      "id": "multiply_run_speed",
+      "name": "Run Speed x3",
+      "description": "Multiplies movement speed by 3",
+      "is_toggle": true,
+      "default_vk": 116
+    },
+    {
+      "id": "unlimited_health",
+      "name": "Unlimited Health",
+      "description": "HP never decreases",
+      "is_toggle": true,
+      "default_vk": 117
+    },
+    {
+      "id": "invisibility",
+      "name": "Invisibility",
+      "description": "Player visibility forced to 0",
+      "is_toggle": true,
+      "default_vk": 118
+    },
+    {
+      "id": "no_investigate_no_body_search",
+      "name": "No Investigate / Body Search",
+      "description": "Police skip investigation checks",
+      "is_toggle": true,
+      "default_vk": 119
+    },
+    {
+      "id": "za_warudo",
+      "name": "Za Warudo (Freeze Time)",
+      "description": "Game clock stops advancing",
+      "is_toggle": true,
+      "default_vk": 120
+    },
+    {
+      "id": "refill_watering_can_after_use",
+      "name": "Refill Watering Can",
+      "description": "Watering can never runs out",
+      "is_toggle": true,
+      "default_vk": 121
+    },
+    {
+      "id": "no_curfew",
+      "name": "No Curfew",
+      "description": "Curfew restrictions removed",
+      "is_toggle": true,
+      "default_vk": 122
+    },
+    {
+      "id": "plants_instant_grown",
+      "name": "Plants Instant Grown",
+      "description": "Plants skip to fully grown stage",
+      "is_toggle": true,
+      "default_vk": 123
+    },
+    {
+      "id": "clone_items_when_click",
+      "name": "Clone Items on Pick-up",
+      "description": "Item quantities doubled on collection",
+      "is_toggle": true,
+      "default_vk": 0
+    },
+    {
+      "id": "free_shopping",
+      "name": "Free Shopping",
+      "description": "All shop costs zeroed",
+      "is_toggle": true,
+      "default_vk": 0
+    },
+    {
+      "id": "shop_unlock_all_items",
+      "name": "Shop: Unlock All Items",
+      "description": "Bypasses item unlock checks",
+      "is_toggle": true,
+      "default_vk": 0
+    },
+    {
+      "id": "instant_mixing_ingredient",
+      "name": "Instant Mixing",
+      "description": "Drug mixing timer set to instant",
+      "is_toggle": true,
+      "default_vk": 0
+    },
+    {
+      "id": "edit_cash",
+      "name": "Set Cash to $999,999",
+      "description": "Write $999,999 to on-hand wallet",
+      "is_toggle": false,
+      "default_vk": 0
+    },
+    {
+      "id": "edit_bank_balance",
+      "name": "Set Bank to $999,999",
+      "description": "Write $999,999 to bank balance",
+      "is_toggle": false,
+      "default_vk": 0
+    },
+    {
+      "id": "add_1_hour",
+      "name": "+1 Hour",
+      "description": "Advance game clock by 1 hour",
+      "is_toggle": false,
+      "default_vk": 0
+    },
+    {
+      "id": "sub_1_hour",
+      "name": "-1 Hour",
+      "description": "Rewind game clock by 1 hour",
+      "is_toggle": false,
+      "default_vk": 0
+    },
+    {
+      "id": "raise_wanted_level",
+      "name": "Raise Wanted Level",
+      "description": "Increment police wanted level",
+      "is_toggle": false,
+      "default_vk": 0
+    },
+    {
+      "id": "reduce_wanted_level",
+      "name": "Reduce Wanted Level",
+      "description": "Decrement police wanted level",
+      "is_toggle": false,
+      "default_vk": 0
     }
   ]
 }
