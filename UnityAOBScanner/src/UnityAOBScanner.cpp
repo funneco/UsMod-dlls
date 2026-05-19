@@ -11,7 +11,7 @@
 
 // ============================================================
 //  Unity AOB Scanner Trainer
-//  Based on UsMOD TrainerLib patterns
+//  Based on USMOD TrainerLib patterns
 //  Target module: GameAssembly.dll
 // ============================================================
 
@@ -25,7 +25,7 @@ struct TrainerFeatureInfo {
 
 // ─────────────────────────────────────────────────────────────
 //  Unity Runtime Detection
-//  Based on UsMOD TrainerLib patterns (mono.dll, il2cpp, GameAssembly)
+//  Based on USMOD TrainerLib patterns (mono.dll, il2cpp, GameAssembly)
 // ─────────────────────────────────────────────────────────────
 
 enum class UnityRuntime { Unknown, Mono, IL2CPP };
@@ -40,7 +40,7 @@ struct UnityRuntimeInfo {
 };
 
 // ─────────────────────────────────────────────────────────────
-//  Unity AOB Scanner Utilities (UsMOD-style)
+//  Unity AOB Scanner Utilities (USMOD-style)
 // ─────────────────────────────────────────────────────────────
 
 namespace UnityAOB {
@@ -212,7 +212,7 @@ struct Feature {
 
 // ─────────────────────────────────────────────────────────────
 //  UnityAOBScannerTrainer
-//  Based on UsMOD TrainerLib patterns for Unity game detection
+//  Based on USMOD TrainerLib patterns for Unity game detection
 // ─────────────────────────────────────────────────────────────
 
 class UnityAOBScannerTrainer {
@@ -225,7 +225,7 @@ public:
     // Module info
     DWORD m_pid = 0;
     uintptr_t m_moduleBase = 0;
-    UnityRuntimeInfo m_runtimeInfo;  // UsMOD-style runtime detection
+    UnityRuntimeInfo m_runtimeInfo;  // USMOD-style runtime detection
 
     // Hook storage - generic array for Unity game hooks
     struct UnityHook {
@@ -237,7 +237,7 @@ public:
     };
     std::vector<UnityHook> m_hooks;
 
-    // Unity common AOB patterns (UsMOD-style)
+    // Unity common AOB patterns (USMOD-style)
     // These patterns are common across Unity games for money/cash manipulation
     struct UnityAOBPattern {
         const char* name;
@@ -253,23 +253,17 @@ public:
         // Default Unity hooks - can be extended per game
         m_features.emplace_back("unity_hook_1", "Unity Hook 1", "Generic Unity game hook", 1, VK_F1);
         m_features.emplace_back("unity_hook_2", "Unity Hook 2", "Generic Unity game hook", 1, VK_F2);
-        
-        // Common Unity AOB patterns for money manipulation (based on prompt.txt patterns)
-        // Pattern: F3 0F 58 49 30 0F 57 (Cash_AOB - addss xmm1,[rcx+30])
-        UnityAOBPattern cashPattern = {"Cash_AOB", {0xF3,0x0F,0x58,0x49,0x30,0x0F,0x57}, 7};
-        m_patterns.push_back(cashPattern);
-        
-        // Pattern: F3 0F 10 81 ?? ?? 00 00 45 33 C9 45 33 C0 33 D2 (Balans_AOB - movss xmm0,[rcx+offset])
-        UnityAOBPattern bankPattern = {"Bank_AOB", {0xF3,0x0F,0x10,0x81,0x00,0x00,0x00,0x00,0x45,0x33,0xC9,0x45,0x33,0xC0,0x33,0xD2}, 16};
-        m_patterns.push_back(bankPattern);
-        
-        // Pattern: 01 BB ?? ?? 00 00 BA 07 00 00 00 (EXP_AOB - add ebx,edi/imul)
-        UnityAOBPattern expPattern = {"EXP_AOB", {0x01,0xBB,0x00,0x00,0x00,0x00,0xBA,0x07,0x00,0x00,0x00}, 11};
-        m_patterns.push_back(expPattern);
+    }
+
+    // Add AOB patterns dynamically (call before Initialize) - game-specific patterns
+    void AddAOBPattern(const char* name, const uint8_t* pattern, size_t len) {
+        UnityAOBPattern pat = {name, {}, len};
+        memcpy(pat.pattern, pattern, len < 16 ? len : 16);
+        m_patterns.push_back(pat);
     }
 
     bool Initialize() {
-        // Detect Unity game process - UsMOD style
+        // Detect Unity game process - USMOD style
         // Look for processes with GameAssembly.dll (IL2CPP) or mono.dll (Mono)
         m_pid = FindUnityProcess();
         if (!m_pid) return false;
@@ -277,7 +271,7 @@ public:
         m_hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, m_pid);
         if (!m_hProc) return false;
 
-        // Detect runtime type (Mono vs IL2CPP) - UsMOD pattern
+        // Detect runtime type (Mono vs IL2CPP) - USMOD pattern
         m_runtimeInfo = UnityAOB::DetectUnityRuntime(m_pid);
         
         if (m_runtimeInfo.type == UnityRuntime::IL2CPP) {
@@ -288,7 +282,7 @@ public:
         
         if (!m_moduleBase) return false;
 
-        // Scan for Unity AOB patterns (UsMOD-style)
+        // Scan for Unity AOB patterns (USMOD-style)
         constexpr size_t SCAN_SIZE = 0x5000000;
         for (auto& pat : m_patterns) {
             pat.addr = UnityAOB::AobScan(m_hProc, m_moduleBase, SCAN_SIZE, pat.pattern, pat.len);
@@ -307,7 +301,7 @@ public:
 
 private:
     DWORD FindUnityProcess() {
-        // UsMOD pattern: Look for GameAssembly.dll or mono.dll modules
+        // USMOD pattern: Look for GameAssembly.dll or mono.dll modules
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap == INVALID_HANDLE_VALUE) return 0;
         
@@ -408,5 +402,8 @@ extern "C" {
     __declspec(dllexport) void trainer_activate_feature(void* h, const char* id) { static_cast<UnityAOBScannerTrainer*>(h)->ActivateFeature(id); }
     __declspec(dllexport) void trainer_set_keybind(void* h, const char* id, int vk) { static_cast<UnityAOBScannerTrainer*>(h)->SetKeybind(id, vk); }
     __declspec(dllexport) int trainer_get_keybind(void* h, const char* id) { return static_cast<UnityAOBScannerTrainer*>(h)->GetKeybind(id); }
+    __declspec(dllexport) void trainer_add_aob_pattern(void* h, const char* name, const unsigned char* pattern, int len) { 
+        static_cast<UnityAOBScannerTrainer*>(h)->AddAOBPattern(name, pattern, len); 
+    }
     __declspec(dllexport) const char* trainer_get_last_error() { return ""; }
 }
