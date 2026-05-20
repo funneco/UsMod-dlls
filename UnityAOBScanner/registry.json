@@ -2,7 +2,7 @@
   "game_id": "unity_aob_scanner",
   "game_name": "Unity AOB Scanner",
   "trainer_version": "1.0.0",
-  "release_tag": "Unity AOB Scanner-1.0.0-1.0.0",
+  "release_tag": "UnityAOBScanner-1.0.0",
   "repo": "funneco/UsMod-dlls",
   "dll_filename": "trainer.dll",
   "version_constraint": {
